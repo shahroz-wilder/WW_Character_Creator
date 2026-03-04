@@ -37,9 +37,16 @@ const requestJson = async (url, options) => {
   return response.json()
 }
 
-export const generatePortrait = async ({ prompt, referenceImage }) => {
+export const generatePortrait = async ({
+  prompt,
+  referenceImage,
+  portraitAspectRatio,
+  portraitPromptPreset,
+}) => {
   const formData = new FormData()
   formData.append('prompt', prompt)
+  formData.append('portraitAspectRatio', portraitAspectRatio || '')
+  formData.append('portraitPromptPreset', portraitPromptPreset || '')
 
   if (referenceImage) {
     formData.append('referenceImage', referenceImage, referenceImage.name)

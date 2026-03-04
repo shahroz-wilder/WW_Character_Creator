@@ -42,10 +42,22 @@ const ModelViewer = lazy(() =>
   import('./components/ModelViewer').then((module) => ({ default: module.ModelViewer })),
 )
 
+const DEV_PRESETS = {
+  portraitAspectRatio: '1:1',
+  portraitPreset:
+    'Create a stylized game-character identity portrait with torso and head in frame, square 1:1 composition, centered framing, clean studio background, sharp focus, and strong costume readability.',
+  multiviewPreset: DEFAULT_MULTIVIEW_PROMPT,
+}
+
 function App() {
   const [initialSession] = useState(() => loadPersistedSession())
   const [prompt, setPrompt] = useState(() => initialSession?.prompt || '')
   const [referenceImage, setReferenceImage] = useState(null)
+  const [devSettings, setDevSettings] = useState(() => ({
+    portraitAspectRatio: initialSession?.devSettings?.portraitAspectRatio || DEV_PRESETS.portraitAspectRatio,
+    portraitPromptPreset:
+      initialSession?.devSettings?.portraitPromptPreset || DEV_PRESETS.portraitPreset,
+  }))
   const [portraitResult, setPortraitResult] = useState(() => initialSession?.portraitResult || null)
   const [multiviewPrompt, setMultiviewPrompt] = useState(
     () => initialSession?.multiviewPrompt || DEFAULT_MULTIVIEW_PROMPT,
@@ -62,6 +74,7 @@ function App() {
   const [isRefreshingTripoJob, setIsRefreshingTripoJob] = useState(false)
   const [hasHydratedPersistedSession, setHasHydratedPersistedSession] = useState(false)
   const [viewerResetSignal, setViewerResetSignal] = useState(0)
+  const [isDevPanelOpen, setIsDevPanelOpen] = useState(false)
 
   const currentPipelineState = error
     ? 'Attention needed'
@@ -92,6 +105,7 @@ function App() {
     : portraitResult?.imageDataUrl
       ? 'PORTRAIT READY'
       : 'IDLE'
+  const topBarMessage = error || pipelineSummary
 
   useEffect(() => {
     document.title = 'WW Character Creator'
@@ -111,6 +125,12 @@ function App() {
           (currentMultiviewPrompt) =>
             session.multiviewPrompt || currentMultiviewPrompt || DEFAULT_MULTIVIEW_PROMPT,
         )
+        setDevSettings((currentDevSettings) => ({
+          portraitAspectRatio:
+            session.devSettings?.portraitAspectRatio || currentDevSettings.portraitAspectRatio,
+          portraitPromptPreset:
+            session.devSettings?.portraitPromptPreset || currentDevSettings.portraitPromptPreset,
+        }))
         setPortraitResult((currentPortraitResult) =>
           session.portraitResult?.imageDataUrl ? session.portraitResult : currentPortraitResult,
         )
@@ -146,6 +166,7 @@ function App() {
     savePersistedSession({
       prompt,
       multiviewPrompt,
+      devSettings,
       portraitResult,
       multiviewResult,
       currentRunId,
@@ -154,6 +175,7 @@ function App() {
     })
   }, [
     currentRunId,
+    devSettings,
     hasHydratedPersistedSession,
     history,
     multiviewPrompt,
@@ -240,6 +262,8 @@ function App() {
       const result = await generatePortrait({
         prompt,
         referenceImage: referenceImage?.file || null,
+        portraitAspectRatio: devSettings.portraitAspectRatio,
+        portraitPromptPreset: devSettings.portraitPromptPreset,
       })
       const runId = createRunId()
       const nextPortrait = {
@@ -444,7 +468,7 @@ function App() {
           </div>
           <div className="status-bar__metric">
             <p className="status-bar__inline">
-              <span className="status-bar__label">Pipeline:</span> {pipelineSummary}
+              <span className="status-bar__label">Message:</span> {topBarMessage}
             </p>
           </div>
         </header>
@@ -471,7 +495,7 @@ function App() {
                 <h2>Portrait</h2>
               </div>
             </div>
-            <div className="panel-fill" />
+            <PortraitReviewCard portraitResult={portraitResult} embedded square />
           </section>
 
           <section className="workspace-viewer">
@@ -541,6 +565,59 @@ function App() {
           </section>
         </section>
       </main>
+      <button
+        type="button"
+        className="dev-toggle"
+        onClick={() => setIsDevPanelOpen((currentValue) => !currentValue)}
+      >
+        DEV
+      </button>
+      {isDevPanelOpen ? (
+        <aside className="dev-panel" aria-label="Development presets">
+          <div className="dev-panel__header">
+            <strong>Presets</strong>
+            <button type="button" className="text-button" onClick={() => setIsDevPanelOpen(false)}>
+              Close
+            </button>
+          </div>
+          <div className="dev-panel__list">
+            <label className="dev-panel__field">
+              <span>Portrait Ratio</span>
+              <input
+                type="text"
+                value={devSettings.portraitAspectRatio}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    portraitAspectRatio: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Portrait Preset</span>
+              <textarea
+                rows={6}
+                value={devSettings.portraitPromptPreset}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    portraitPromptPreset: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Multiview Preset</span>
+              <textarea
+                rows={5}
+                value={multiviewPrompt}
+                onChange={(event) => setMultiviewPrompt(event.target.value)}
+              />
+            </label>
+          </div>
+        </aside>
+      ) : null}
     </div>
   )
 }

@@ -5,24 +5,32 @@ const PORTRAIT_FALLBACK =
   'Create a stylized game-character portrait preserving the identity, costume, colors, and overall design of this reference.'
 
 const PORTRAIT_PREFIX =
-  'Create a stylized game-character identity portrait with torso and head in frame, clean studio background, sharp focus, and strong costume readability.'
+  'Create a stylized game-character identity portrait with torso and head in frame, square 1:1 composition, centered framing, clean studio background, sharp focus, and strong costume readability.'
 
-export const buildPortraitPrompt = ({ prompt, hasReferenceImage }) => {
+export const buildPortraitPrompt = ({
+  prompt,
+  hasReferenceImage,
+  portraitPromptPreset,
+  portraitAspectRatio,
+}) => {
   const trimmedPrompt = prompt?.trim()
+  const normalizedAspectRatio = portraitAspectRatio?.trim() || '1:1'
+  const preset = portraitPromptPreset?.trim() || PORTRAIT_PREFIX
+  const basePrompt = `${preset} Output aspect ratio: ${normalizedAspectRatio}.`
 
   if (trimmedPrompt && hasReferenceImage) {
-    return `${PORTRAIT_PREFIX} Use this direction: ${trimmedPrompt}`
+    return `${basePrompt} Use this direction: ${trimmedPrompt}`
   }
 
   if (trimmedPrompt) {
-    return `${PORTRAIT_PREFIX} ${trimmedPrompt}`
+    return `${basePrompt} ${trimmedPrompt}`
   }
 
   if (hasReferenceImage) {
-    return `${PORTRAIT_PREFIX} ${PORTRAIT_FALLBACK}`
+    return `${basePrompt} ${PORTRAIT_FALLBACK}`
   }
 
-  return `${PORTRAIT_PREFIX} Design a distinctive stylized character portrait.`
+  return `${basePrompt} Design a distinctive stylized character portrait.`
 }
 
 export const normalizeMultiviewPrompt = (prompt) => {

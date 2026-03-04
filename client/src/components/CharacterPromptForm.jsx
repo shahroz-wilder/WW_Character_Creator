@@ -6,6 +6,7 @@ export function CharacterPromptForm({
   referenceImage,
   onReferenceImageChange,
   onGeneratePortrait,
+  onReset,
   isGeneratingPortrait,
   title = 'Identity Portrait',
   stepLabel = 'Step 01',
@@ -43,10 +44,36 @@ export function CharacterPromptForm({
           className="primary-button"
           onClick={onGeneratePortrait}
           disabled={isGeneratingPortrait}
+          aria-label="Generate Portrait"
         >
           {isGeneratingPortrait ? 'Generating...' : 'Generate'}
         </button>
-        <div className="action-row__spacer" aria-hidden="true" />
+        <button
+          type="button"
+          className="icon-button icon-button--reset"
+          onClick={onReset}
+          disabled={isGeneratingPortrait}
+          aria-label="Reset Session"
+          title="Reset Session"
+        >
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path
+              d="M7 7.5V4.5m0 0H4m3 0l-2 2"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M7.5 6.5a8 8 0 1 1-1.6 9.1"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="visually-hidden">Reset Session</span>
+        </button>
       </div>
     </section>
   )

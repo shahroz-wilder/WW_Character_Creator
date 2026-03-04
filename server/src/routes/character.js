@@ -17,6 +17,8 @@ export const createCharacterRouter = ({ portraitService, multiviewService }) => 
   router.post('/portrait', upload.single('referenceImage'), async (req, res) => {
     try {
       const prompt = req.body?.prompt || ''
+      const portraitAspectRatio = req.body?.portraitAspectRatio || '1:1'
+      const portraitPromptPreset = req.body?.portraitPromptPreset || ''
       const referenceImage = req.file || null
 
       if (!prompt.trim() && !referenceImage) {
@@ -30,6 +32,8 @@ export const createCharacterRouter = ({ portraitService, multiviewService }) => 
       const result = await portraitService.generatePortrait({
         prompt,
         referenceImageBuffer: referenceImage?.buffer || null,
+        portraitAspectRatio,
+        portraitPromptPreset,
       })
 
       res.json({

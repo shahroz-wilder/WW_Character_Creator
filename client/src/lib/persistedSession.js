@@ -50,6 +50,11 @@ const normalizeMultiviewResult = (multiviewResult) => {
   }
 }
 
+const normalizeDevSettings = (devSettings) => ({
+  portraitAspectRatio: devSettings?.portraitAspectRatio || '1:1',
+  portraitPromptPreset: devSettings?.portraitPromptPreset || '',
+})
+
 const openDatabase = () => {
   if (!canUseIndexedDb()) {
     return Promise.resolve(null)
@@ -104,6 +109,7 @@ export const loadPersistedSession = () => {
     return {
       prompt: parsed?.prompt || '',
       multiviewPrompt: parsed?.multiviewPrompt || '',
+      devSettings: normalizeDevSettings(parsed?.devSettings),
       portraitResult: normalizePortraitResult(parsed?.portraitResult),
       multiviewResult: normalizeMultiviewResult(parsed?.multiviewResult),
       currentRunId: parsed?.currentRunId || '',
@@ -133,6 +139,7 @@ export const loadPersistedRichSession = async () => {
     return {
       prompt: payload.prompt || '',
       multiviewPrompt: payload.multiviewPrompt || '',
+      devSettings: normalizeDevSettings(payload.devSettings),
       portraitResult: normalizePortraitResult(payload.portraitResult),
       multiviewResult: normalizeMultiviewResult(payload.multiviewResult),
       currentRunId: payload.currentRunId || '',
@@ -150,7 +157,16 @@ export const loadPersistedRichSession = async () => {
   }
 }
 
-export const savePersistedSession = ({ prompt, multiviewPrompt, portraitResult, multiviewResult, currentRunId, history, tripoJob }) => {
+export const savePersistedSession = ({
+  prompt,
+  multiviewPrompt,
+  devSettings,
+  portraitResult,
+  multiviewResult,
+  currentRunId,
+  history,
+  tripoJob,
+}) => {
   if (!canUseStorage()) {
     return Promise.resolve()
   }
@@ -177,6 +193,7 @@ export const savePersistedSession = ({ prompt, multiviewPrompt, portraitResult, 
   const richPayload = {
     prompt: prompt || '',
     multiviewPrompt: multiviewPrompt || '',
+    devSettings: normalizeDevSettings(devSettings),
     portraitResult: normalizePortraitResult(portraitResult),
     multiviewResult: normalizeMultiviewResult(multiviewResult),
     currentRunId: currentRunId || '',
@@ -195,6 +212,7 @@ export const savePersistedSession = ({ prompt, multiviewPrompt, portraitResult, 
       {
         prompt: prompt || '',
         multiviewPrompt: multiviewPrompt || '',
+        devSettings: normalizeDevSettings(devSettings),
         portraitResult: normalizePortraitResult(portraitResult),
         multiviewResult: normalizeMultiviewResult(multiviewResult),
         currentRunId: currentRunId || '',

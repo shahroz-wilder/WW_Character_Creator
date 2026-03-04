@@ -1,6 +1,6 @@
 import { buildPortraitPrompt } from './promptBuilder.js'
 import { imageBufferToDataUrl } from '../utils/dataUrl.js'
-import { normalizeForGemini } from './imageTransformService.js'
+import { normalizeForGemini, normalizePortraitToAspectRatio } from './imageTransformService.js'
 
 const imagePart = (buffer, mimeType = 'image/png') => ({
   inlineData: {
@@ -10,13 +10,20 @@ const imagePart = (buffer, mimeType = 'image/png') => ({
 })
 
 export const createPortraitService = ({ geminiClient, geminiModel }) => ({
-  async generatePortrait({ prompt, referenceImageBuffer }) {
+  async generatePortrait({
+    prompt,
+    referenceImageBuffer,
+    portraitPromptPreset,
+    portraitAspectRatio,
+  }) {
     const normalizedReference = referenceImageBuffer
       ? await normalizeForGemini(referenceImageBuffer)
       : null
     const promptUsed = buildPortraitPrompt({
       prompt,
       hasReferenceImage: Boolean(referenceImageBuffer),
+      portraitPromptPreset,
+      portraitAspectRatio,
     })
     const parts = [{ text: promptUsed }]
 
@@ -29,9 +36,14 @@ export const createPortraitService = ({ geminiClient, geminiModel }) => ({
       model: geminiModel,
     })
 
+    const normalizedPortraitBuffer = await normalizePortraitToAspectRatio(
+      generated.buffer,
+      portraitAspectRatio || '1:1',
+    )
+
     return {
-      imageBuffer: generated.buffer,
-      imageDataUrl: imageBufferToDataUrl(generated.buffer, generated.mimeType),
+      imageBuffer: normalizedPortraitBuffer,
+      imageDataUrl: imageBufferToDataUrl(normalizedPortraitBuffer, 'image/png'),
       promptUsed,
       inputMode:
         prompt?.trim() && referenceImageBuffer

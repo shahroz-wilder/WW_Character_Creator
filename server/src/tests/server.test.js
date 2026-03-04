@@ -150,6 +150,8 @@ describe('portrait route', () => {
     expect(portraitService.generatePortrait).toHaveBeenCalledWith({
       prompt: 'stylized ranger',
       referenceImageBuffer: null,
+      portraitAspectRatio: '1:1',
+      portraitPromptPreset: '',
     })
   })
 
