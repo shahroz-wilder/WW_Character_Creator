@@ -60,6 +60,36 @@ function App() {
   const [isRefreshingTripoJob, setIsRefreshingTripoJob] = useState(false)
   const [hasHydratedPersistedSession, setHasHydratedPersistedSession] = useState(false)
 
+  const currentPipelineState = error
+    ? 'Attention needed'
+    : isGeneratingPortrait
+      ? 'Generating portrait'
+      : turnaroundGenerationMode === 'front-only'
+        ? 'Generating front view'
+        : turnaroundGenerationMode === 'full'
+          ? 'Generating turnaround'
+          : isCreatingModel
+            ? 'Submitting multiview model'
+            : isCreatingFrontModel
+              ? 'Submitting front-view model'
+              : isRefreshingTripoJob
+                ? 'Refreshing Tripo result'
+                : tripoJob.status === 'success'
+                  ? '3D model ready'
+                  : tripoJob.status === 'running'
+                    ? 'Tripo is building the model'
+                    : tripoJob.status === 'queued'
+                      ? 'Tripo task queued'
+                      : portraitResult?.imageDataUrl
+                        ? 'Portrait ready for next step'
+                        : 'Ready for a new character'
+
+  const pipelineSummary = tripoJob.taskId
+    ? `${tripoJob.status.toUpperCase()}${tripoJob.progress ? ` ${tripoJob.progress}%` : ''}`
+    : portraitResult?.imageDataUrl
+      ? 'PORTRAIT READY'
+      : 'IDLE'
+
   useEffect(() => {
     document.title = 'WW Character Creator'
   }, [])
@@ -379,19 +409,22 @@ function App() {
   return (
     <div className="page-shell">
       <div className="page-backdrop" aria-hidden="true" />
-      <main className="layout-grid">
-        <header className="topbar-card">
-          <div className="topbar-copy">
-            <p className="eyebrow">WW Character Creator</p>
-            <h1 className="topbar-title">Character to 3D pipeline</h1>
-            <p className="topbar-summary">
-              Prompt or upload, generate the turnaround, then send it to Tripo.
-            </p>
+      <main className="workspace-shell">
+        <header className="status-bar">
+          <div className="status-bar__account">
+            <span className="status-dot" aria-hidden="true" />
+            <div>
+              <p className="eyebrow">Session</p>
+              <strong>Local workspace</strong>
+            </div>
           </div>
-          <div className="topbar-meta">
-            <span>Gemini portrait + multiview</span>
-            <span>Mirrored side-view right</span>
-            <span>Three.js GLB preview</span>
+          <div className="status-bar__message">
+            <p className="eyebrow">Status</p>
+            <p>{currentPipelineState}</p>
+          </div>
+          <div className="status-bar__metric">
+            <p className="eyebrow">Pipeline</p>
+            <strong>{pipelineSummary}</strong>
           </div>
         </header>
 
@@ -401,62 +434,84 @@ function App() {
           </section>
         ) : null}
 
-        <CharacterPromptForm
-          prompt={prompt}
-          onPromptChange={setPrompt}
-          referenceImage={referenceImage}
-          onReferenceImageChange={setReferenceImage}
-          onGeneratePortrait={handleGeneratePortrait}
-          onReset={handleReset}
-          isGeneratingPortrait={isGeneratingPortrait}
-        />
-
-        <PortraitReviewCard portraitResult={portraitResult} />
-
-        <MultiviewPromptEditor
-          value={multiviewPrompt}
-          onChange={setMultiviewPrompt}
-          onGenerateFrontTest={() => handleGenerateTurnaround('front-only')}
-          onGenerateTurnaround={() => handleGenerateTurnaround('full')}
-          disabled={!portraitResult || turnaroundGenerationMode !== ''}
-          generationMode={turnaroundGenerationMode}
-        />
-
-        <MultiviewGrid views={multiviewResult?.views || null} mode={multiviewResult?.mode || 'full'} />
-
-        <TripoJobPanel
-          job={tripoJob}
-          canCreateModel={hasCompleteTurnaround(multiviewResult?.views)}
-          canCreateFrontModel={Boolean(multiviewResult?.views?.front?.imageDataUrl)}
-          isCreatingModel={isCreatingModel}
-          isCreatingFrontModel={isCreatingFrontModel}
-          isRefreshingJob={isRefreshingTripoJob}
-          onCreateModel={handleCreateModel}
-          onCreateFrontModel={handleCreateFrontModel}
-          onForcePullResult={handleForcePullResult}
-          onDownloadModel={handleDownloadModel}
-        />
-
-        <section className="viewer-card">
-          <div className="section-heading">
-            <p className="step-label">Step 03</p>
-            <h2>3D Preview</h2>
+        <section className="workspace-grid">
+          <div className="workspace-slot workspace-slot--prompt">
+            <CharacterPromptForm
+              prompt={prompt}
+              onPromptChange={setPrompt}
+              referenceImage={referenceImage}
+              onReferenceImageChange={setReferenceImage}
+              onGeneratePortrait={handleGeneratePortrait}
+              onReset={handleReset}
+              isGeneratingPortrait={isGeneratingPortrait}
+            />
           </div>
-          {tripoJob.outputs?.modelUrl ? (
-            <Suspense
-              fallback={
-                <div className="viewer-placeholder">
-                  <p>Loading viewer...</p>
-                </div>
-              }
-            >
-              <ModelViewer modelUrl={tripoJob.outputs.modelUrl} />
-            </Suspense>
-          ) : (
-            <div className="viewer-placeholder">
-              <p>The textured GLB appears here after Tripo completes.</p>
+
+          <div className="workspace-slot workspace-slot--portrait">
+            <PortraitReviewCard portraitResult={portraitResult} />
+          </div>
+
+          <section className="workspace-viewer">
+            <div className="workspace-viewer__heading">
+              <div className="section-heading">
+                <p className="step-label">Step 03</p>
+                <h2>3D View</h2>
+              </div>
+              <p className="workspace-viewer__caption">
+                Tripo task controls, live task state, and the GLB preview live together here.
+              </p>
             </div>
-          )}
+
+            <TripoJobPanel
+              embedded
+              job={tripoJob}
+              canCreateModel={hasCompleteTurnaround(multiviewResult?.views)}
+              canCreateFrontModel={Boolean(multiviewResult?.views?.front?.imageDataUrl)}
+              isCreatingModel={isCreatingModel}
+              isCreatingFrontModel={isCreatingFrontModel}
+              isRefreshingJob={isRefreshingTripoJob}
+              onCreateModel={handleCreateModel}
+              onCreateFrontModel={handleCreateFrontModel}
+              onForcePullResult={handleForcePullResult}
+              onDownloadModel={handleDownloadModel}
+            />
+
+            <div className="workspace-viewer__viewport">
+              {tripoJob.outputs?.modelUrl ? (
+                <Suspense
+                  fallback={
+                    <div className="viewer-placeholder">
+                      <p>Loading viewer...</p>
+                    </div>
+                  }
+                >
+                  <ModelViewer modelUrl={tripoJob.outputs.modelUrl} />
+                </Suspense>
+              ) : (
+                <div className="viewer-placeholder">
+                  <p>The textured GLB appears here after Tripo completes.</p>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <div className="workspace-slot workspace-slot--turnaround">
+            <MultiviewPromptEditor
+              value={multiviewPrompt}
+              onChange={setMultiviewPrompt}
+              onGenerateFrontTest={() => handleGenerateTurnaround('front-only')}
+              onGenerateTurnaround={() => handleGenerateTurnaround('full')}
+              disabled={!portraitResult || turnaroundGenerationMode !== ''}
+              generationMode={turnaroundGenerationMode}
+            />
+          </div>
+
+          <div className="workspace-slot workspace-slot--multiview">
+            <MultiviewGrid
+              views={multiviewResult?.views || null}
+              mode={multiviewResult?.mode || 'full'}
+            />
+          </div>
         </section>
 
         <HistoryPanel history={history} />

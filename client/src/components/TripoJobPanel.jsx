@@ -11,9 +11,13 @@ export function TripoJobPanel({
   onCreateFrontModel,
   onForcePullResult,
   onDownloadModel,
+  embedded = false,
 }) {
+  const Wrapper = embedded ? 'div' : 'section'
+  const wrapperClassName = embedded ? 'job-panel job-panel--embedded' : 'panel-card job-panel'
+
   return (
-    <section className="panel-card">
+    <Wrapper className={wrapperClassName}>
       <div className="section-heading">
         <p className="step-label">Step 03</p>
         <h2>Tripo Task</h2>
@@ -61,6 +65,6 @@ export function TripoJobPanel({
           Download GLB
         </button>
       </div>
-    </section>
+    </Wrapper>
   )
 }
