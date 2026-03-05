@@ -47,7 +47,7 @@ const ModelViewer = lazy(() =>
 const DEV_PRESETS = {
   portraitAspectRatio: '1:1',
   portraitPreset:
-    'Create a stylized game-character identity portrait with torso and head in frame, square 1:1 composition, centered framing, clean studio background, sharp focus, and strong costume readability.',
+    'Character identity portrait front with torso and head in frame centered framing, Grey seamless background, no cape, no weapon',
   multiviewPreset: DEFAULT_MULTIVIEW_PROMPT,
   spriteSize: 64,
 }
