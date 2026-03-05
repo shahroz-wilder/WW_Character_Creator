@@ -104,7 +104,7 @@ describe('App', () => {
     await openDevPanel(user)
 
     expect(screen.getByRole('button', { name: 'Generate Sprite Run' })).toBeDisabled()
-    expect(screen.getByRole('combobox')).toHaveValue('64')
+    expect(screen.getByRole('combobox', { name: 'Sprite Size' })).toHaveValue('64')
   })
 
   it('generates sprite run and renders four animated direction tiles', async () => {
@@ -207,7 +207,40 @@ describe('App', () => {
     })
 
     await openDevPanel(user)
-    expect(screen.getByRole('combobox')).toHaveValue('128')
+    expect(screen.getByRole('combobox', { name: 'Sprite Size' })).toHaveValue('128')
+  })
+
+  it('submits Tripo static mode when selected in DEV', async () => {
+    generatePortrait.mockResolvedValue({
+      imageDataUrl: makeDataUrl('portrait'),
+      promptUsed: 'pilot',
+      inputMode: 'prompt',
+      normalizedReferenceImageDataUrl: null,
+    })
+    generateMultiview.mockResolvedValue(makeFullMultiviewResult())
+    createTripoTask.mockResolvedValue({
+      taskId: 'task-static-1',
+      status: 'queued',
+    })
+
+    render(<App />)
+    const user = userEvent.setup()
+
+    await generatePortraitThenMultiview(user)
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Tripo Mode' }), 'static')
+    await user.click(screen.getByRole('button', { name: 'Create 3D Model' }))
+
+    await waitFor(() =>
+      expect(createTripoTask).toHaveBeenCalledWith({
+        views: {
+          front: makeDataUrl('front'),
+          back: makeDataUrl('back'),
+          left: makeDataUrl('left'),
+          right: makeDataUrl('right'),
+        },
+        animationMode: 'static',
+      }),
+    )
   })
 
   it('still supports front-only Tripo task creation', async () => {

@@ -781,6 +781,28 @@
   color: rgba(248, 250, 252, 0.92);
 }
 
+.zoom-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 124, 87, 0.35);
+  background: rgba(10, 10, 14, 0.72);
+  color: rgba(248, 250, 252, 0.95);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+}
+
+.zoom-badge svg {
+  width: 14px;
+  height: 14px;
+}
+
 .view-card img {
   display: block;
   flex: 1 1 auto;
@@ -791,6 +813,61 @@
   object-position: center center;
   background: transparent;
   padding: 0;
+  cursor: zoom-in;
+}
+
+.view-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 8, 12, 0.84);
+  backdrop-filter: blur(6px);
+  padding: 24px;
+}
+
+.view-lightbox__content {
+  position: relative;
+  width: min(92vw, 980px);
+  max-height: 92vh;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 124, 87, 0.28);
+  background: rgba(10, 10, 14, 0.96);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.view-lightbox__label {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: rgba(248, 250, 252, 0.95);
+  letter-spacing: 0.04em;
+}
+
+.view-lightbox__content img {
+  width: 100%;
+  height: auto;
+  max-height: calc(92vh - 120px);
+  object-fit: contain;
+  border-radius: 14px;
+  background: #d7dbd6;
+}
+
+.view-lightbox__close {
+  justify-self: end;
+  border: 1px solid rgba(255, 124, 87, 0.24);
+  border-radius: 999px;
+  background: rgba(22, 22, 28, 0.92);
+  color: var(--copy-soft);
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .view-card .empty-state {

@@ -50,6 +50,7 @@ const DEV_PRESETS = {
     'Character identity portrait front with torso and head in frame centered framing, Grey seamless background, no cape, no weapon',
   multiviewPreset: DEFAULT_MULTIVIEW_PROMPT,
   spriteSize: 64,
+  tripoAnimationMode: 'animated',
 }
 
 const MULTIVIEW_ORDER = ['front', 'back', 'left', 'right']
@@ -89,6 +90,8 @@ function App() {
     portraitPromptPreset:
       initialSession?.devSettings?.portraitPromptPreset || DEV_PRESETS.portraitPreset,
     spriteSize: Number(initialSession?.devSettings?.spriteSize) || DEV_PRESETS.spriteSize,
+    tripoAnimationMode:
+      initialSession?.devSettings?.tripoAnimationMode || DEV_PRESETS.tripoAnimationMode,
   }))
   const [portraitResult, setPortraitResult] = useState(() => initialSession?.portraitResult || null)
   const [multiviewPrompt, setMultiviewPrompt] = useState(
@@ -168,6 +171,8 @@ function App() {
             session.devSettings?.portraitPromptPreset || currentDevSettings.portraitPromptPreset,
           spriteSize:
             Number(session.devSettings?.spriteSize) || currentDevSettings.spriteSize,
+          tripoAnimationMode:
+            session.devSettings?.tripoAnimationMode || currentDevSettings.tripoAnimationMode,
         }))
         setPortraitResult((currentPortraitResult) =>
           session.portraitResult?.imageDataUrl ? session.portraitResult : currentPortraitResult,
@@ -417,6 +422,7 @@ function App() {
           left: multiviewResult.views.left.imageDataUrl,
           right: multiviewResult.views.right.imageDataUrl,
         },
+        animationMode: devSettings.tripoAnimationMode,
       })
 
       setTripoJob({
@@ -456,6 +462,7 @@ function App() {
     try {
       const result = await createTripoFrontTask({
         imageDataUrl: frontImageDataUrl,
+        animationMode: devSettings.tripoAnimationMode,
       })
 
       setTripoJob({
@@ -740,6 +747,21 @@ function App() {
                 <option value="128">128x128</option>
               </select>
             </label>
+            <label className="dev-panel__field">
+              <span>Tripo Mode</span>
+              <select
+                value={devSettings.tripoAnimationMode}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    tripoAnimationMode: event.target.value,
+                  }))
+                }
+              >
+                <option value="animated">Animated</option>
+                <option value="static">Static</option>
+              </select>
+            </label>
             <div className="action-row action-row--compact action-row--dev">
               <button
                 type="button"
@@ -795,7 +817,8 @@ function App() {
               <span>Tripo</span>
               <div className="dev-panel__status">
                 <strong>Task Controls</strong>
-                <p>{tripoJob.outputs?.modelUrl ? 'Auto-rotate enabled' : 'Preview unavailable'}</p>
+                <p>{tripoJob.outputs?.modelUrl ? 'Preview ready' : 'Preview unavailable'}</p>
+                <p>Output mode: {devSettings.tripoAnimationMode === 'animated' ? 'Animated' : 'Static'}</p>
                 <p>Status: {tripoJob.status}</p>
                 <p>
                   {tripoJob.taskId

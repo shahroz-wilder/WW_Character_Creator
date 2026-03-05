@@ -61,6 +61,18 @@ const findSourceSkeleton = (object) => {
   return new THREE.Skeleton(bones)
 }
 
+const chooseIdleLikeClip = (clips = []) => {
+  if (!Array.isArray(clips) || clips.length === 0) {
+    return null
+  }
+
+  const idleLikeClip =
+    clips.find((clip) => /idle/i.test(clip?.name || '')) ||
+    clips.find((clip) => /stand|rest/i.test(clip?.name || ''))
+
+  return idleLikeClip || clips[0]
+}
+
 export function ModelViewer({ modelUrl, resetSignal = 0 }) {
   const containerRef = useRef(null)
   const controlsRef = useRef(null)
@@ -104,8 +116,8 @@ export function ModelViewer({ modelUrl, resetSignal = 0 }) {
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
-    controls.autoRotate = true
-    controls.autoRotateSpeed = 1.1
+    controls.autoRotate = false
+    controls.autoRotateSpeed = 0
     controls.minDistance = 1
     controls.maxDistance = 20
     controlsRef.current = controls
@@ -124,6 +136,17 @@ export function ModelViewer({ modelUrl, resetSignal = 0 }) {
         scene.add(loadedScene)
         fitCameraToObject(camera, controls, loadedScene)
         targetSkinnedMesh = findFirstSkinnedMesh(loadedScene)
+        const embeddedClip = chooseIdleLikeClip(gltf.animations || [])
+
+        if (embeddedClip) {
+          mixer = new THREE.AnimationMixer(loadedScene)
+          const action = mixer.clipAction(embeddedClip)
+          action.reset()
+          action.setLoop(THREE.LoopRepeat, Infinity)
+          action.play()
+          setIsLoading(false)
+          return
+        }
 
         if (targetSkinnedMesh) {
           fbxLoader.load(

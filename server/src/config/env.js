@@ -46,6 +46,9 @@ export const loadEnv = (source = process.env) => {
     tripoRigType: source.TRIPO_RIG_TYPE || 'biped',
     tripoRigSpec: source.TRIPO_RIG_SPEC || 'mixamo',
     tripoRigModelVersion: source.TRIPO_RIG_MODEL_VERSION || 'v2.0-20250506',
+    tripoIdleAnimationEnabled: parseBoolean(source.TRIPO_IDLE_ANIMATION_ENABLED, true),
+    tripoIdleAnimationTaskType: source.TRIPO_IDLE_ANIMATION_TASK_TYPE || 'animate_model',
+    tripoIdleAnimationName: source.TRIPO_IDLE_ANIMATION_NAME || 'idle',
   }
 
   const missingKeys = []

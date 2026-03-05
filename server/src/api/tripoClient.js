@@ -122,6 +122,30 @@ export const createTripoClient = ({ apiKey, baseUrl }) => {
 
       return taskId
     },
+    async createAnimationTask({
+      originalModelTaskId,
+      animation = 'idle',
+      taskType = 'animate_model',
+    }) {
+      const payload = await request('/task', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type: taskType,
+          original_model_task_id: originalModelTaskId,
+          animation,
+        }),
+      })
+
+      const taskId = payload?.data?.task_id
+      if (!taskId) {
+        throw new AppError('Tripo did not return an animation task id.', 502)
+      }
+
+      return taskId
+    },
     async getTask(taskId) {
       const payload = await request(`/task/${taskId}`, { method: 'GET' })
       return payload?.data

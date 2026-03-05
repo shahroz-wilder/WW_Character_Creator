@@ -68,6 +68,7 @@ const normalizeDevSettings = (devSettings) => ({
   portraitAspectRatio: devSettings?.portraitAspectRatio || '1:1',
   portraitPromptPreset: devSettings?.portraitPromptPreset || '',
   spriteSize: Number(devSettings?.spriteSize) || 64,
+  tripoAnimationMode: devSettings?.tripoAnimationMode === 'static' ? 'static' : 'animated',
 })
 
 const openDatabase = () => {

@@ -6,7 +6,9 @@ export const createTripoRouter = ({ tripoService }) => {
 
   router.post('/tasks', async (req, res) => {
     try {
-      const result = await tripoService.createTaskFromViews(req.body?.views)
+      const result = await tripoService.createTaskFromViews(req.body?.views, {
+        animationMode: req.body?.animationMode,
+      })
       res.json(result)
     } catch (error) {
       const { statusCode, body } = toErrorResponse(error)
@@ -16,7 +18,9 @@ export const createTripoRouter = ({ tripoService }) => {
 
   router.post('/tasks/front', async (req, res) => {
     try {
-      const result = await tripoService.createTaskFromFrontView(req.body?.imageDataUrl)
+      const result = await tripoService.createTaskFromFrontView(req.body?.imageDataUrl, {
+        animationMode: req.body?.animationMode,
+      })
       res.json(result)
     } catch (error) {
       const { statusCode, body } = toErrorResponse(error)

@@ -61,9 +61,17 @@ export const normalizeMultiviewPrompt = (prompt) => {
 export const buildViewPrompt = ({ view, characterPrompt, multiviewPrompt }) => {
   const basePrompt = normalizeMultiviewPrompt(multiviewPrompt)
   const specificViewLabel =
-    view === 'front' ? 'FRONT VIEW ONLY' : view === 'back' ? 'BACK VIEW ONLY' : 'Side VIEW ONLY'
+    view === 'front'
+      ? 'FRONT VIEW ONLY'
+      : view === 'back'
+        ? 'BACK VIEW ONLY'
+        : view === 'left'
+          ? 'LEFT VIEW ONLY'
+          : view === 'right'
+            ? 'RIGHT VIEW ONLY'
+            : 'Side VIEW ONLY'
   const viewSpecificPrompt = basePrompt.replace(
-    /FRONT VIEW ONLY|BACK VIEW ONLY|Side VIEW ONLY/gi,
+    /FRONT VIEW ONLY|BACK VIEW ONLY|LEFT VIEW ONLY|RIGHT VIEW ONLY|Side VIEW ONLY/gi,
     specificViewLabel,
   )
 

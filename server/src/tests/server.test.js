@@ -31,6 +31,9 @@ const TEST_CONFIG = {
   tripoRigType: 'biped',
   tripoRigSpec: 'mixamo',
   tripoRigModelVersion: 'v2.0-20250506',
+  tripoIdleAnimationEnabled: false,
+  tripoIdleAnimationTaskType: 'animate_model',
+  tripoIdleAnimationName: 'idle',
   pixellabApiKey: 'pxl_test',
   pixellabBaseUrl: 'https://api.pixellab.ai/v1',
 }
@@ -116,7 +119,7 @@ describe('promptBuilder', () => {
         characterPrompt: 'pilot',
         multiviewPrompt: DEFAULT_MULTIVIEW_PROMPT,
       }),
-    ).toContain('Side VIEW ONLY')
+    ).toContain('LEFT VIEW ONLY')
   })
 })
 
@@ -642,6 +645,218 @@ describe('tripoService', () => {
     expect(summary.outputs).toEqual({
       modelUrl: '/api/tripo/tasks/rig-task-999/model?variant=model',
       downloadUrl: '/api/tripo/tasks/rig-task-999/model?variant=model',
+    })
+  })
+
+  it('starts idle animation task after rig success when enabled', async () => {
+    const createRigTask = vi.fn().mockResolvedValue('rig-task-idle-1')
+    const createAnimationTask = vi.fn().mockResolvedValue('anim-task-777')
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer: vi.fn(),
+        createMultiviewTask: vi.fn(),
+        createImageTask: vi.fn(),
+        createRigTask,
+        createAnimationTask,
+        getTask: vi
+          .fn()
+          .mockResolvedValueOnce({
+            task_id: 'task-base-idle-1',
+            type: 'multiview_to_model',
+            status: 'success',
+            progress: 100,
+            output: {
+              model: 'https://example.com/base.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'rig-task-idle-1',
+            type: 'animate_rig',
+            status: 'success',
+            progress: 100,
+            output: {
+              rigged_model: 'https://example.com/rigged.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'anim-task-777',
+            type: 'animate_model',
+            status: 'success',
+            progress: 100,
+            output: {
+              animated_model: 'https://example.com/animated-idle.glb',
+            },
+          }),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoRigMixamo: true,
+        tripoIdleAnimationEnabled: true,
+      },
+    })
+
+    const summary = await tripoService.getTaskSummary('task-base-idle-1')
+
+    expect(createRigTask).toHaveBeenCalledTimes(1)
+    expect(createAnimationTask).toHaveBeenCalledWith({
+      originalModelTaskId: 'rig-task-idle-1',
+      animation: 'idle',
+      taskType: 'animate_model',
+    })
+    expect(summary.taskId).toBe('anim-task-777')
+    expect(summary.outputs).toEqual({
+      modelUrl: '/api/tripo/tasks/anim-task-777/model?variant=animated_model',
+      downloadUrl: '/api/tripo/tasks/anim-task-777/model?variant=animated_model',
+    })
+  })
+
+  it('skips idle animation task when static mode is requested', async () => {
+    const buffer = await sharp({
+      create: {
+        width: 1,
+        height: 1,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 },
+      },
+    })
+      .png()
+      .toBuffer()
+
+    const uploadImageBuffer = vi.fn().mockResolvedValue({ file_token: 'front-token', type: 'jpg' })
+    const createImageTask = vi.fn().mockResolvedValue('task-base-static-1')
+    const createRigTask = vi.fn().mockResolvedValue('rig-task-static-1')
+    const createAnimationTask = vi.fn()
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer,
+        createMultiviewTask: vi.fn(),
+        createImageTask,
+        createRigTask,
+        createAnimationTask,
+        getTask: vi
+          .fn()
+          .mockResolvedValueOnce({
+            task_id: 'task-base-static-1',
+            type: 'image_to_model',
+            status: 'success',
+            progress: 100,
+            output: {
+              model: 'https://example.com/base-static.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'rig-task-static-1',
+            type: 'animate_rig',
+            status: 'success',
+            progress: 100,
+            output: {
+              rigged_model: 'https://example.com/rigged-static.glb',
+            },
+          }),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoRigMixamo: true,
+        tripoIdleAnimationEnabled: true,
+      },
+    })
+
+    await tripoService.createTaskFromFrontView(
+      `data:image/png;base64,${buffer.toString('base64')}`,
+      { animationMode: 'static' },
+    )
+
+    const summary = await tripoService.getTaskSummary('task-base-static-1')
+
+    expect(createRigTask).toHaveBeenCalledTimes(1)
+    expect(createAnimationTask).not.toHaveBeenCalled()
+    expect(summary.taskId).toBe('rig-task-static-1')
+    expect(summary.outputs).toEqual({
+      modelUrl: '/api/tripo/tasks/rig-task-static-1/model?variant=rigged_model',
+      downloadUrl: '/api/tripo/tasks/rig-task-static-1/model?variant=rigged_model',
+    })
+  })
+
+  it('forces idle animation task when animated mode is requested', async () => {
+    const buffer = await sharp({
+      create: {
+        width: 1,
+        height: 1,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 },
+      },
+    })
+      .png()
+      .toBuffer()
+
+    const uploadImageBuffer = vi.fn().mockResolvedValue({ file_token: 'front-token', type: 'jpg' })
+    const createImageTask = vi.fn().mockResolvedValue('task-base-animated-1')
+    const createRigTask = vi.fn().mockResolvedValue('rig-task-animated-1')
+    const createAnimationTask = vi.fn().mockResolvedValue('anim-task-animated-1')
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer,
+        createMultiviewTask: vi.fn(),
+        createImageTask,
+        createRigTask,
+        createAnimationTask,
+        getTask: vi
+          .fn()
+          .mockResolvedValueOnce({
+            task_id: 'task-base-animated-1',
+            type: 'image_to_model',
+            status: 'success',
+            progress: 100,
+            output: {
+              model: 'https://example.com/base-animated.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'rig-task-animated-1',
+            type: 'animate_rig',
+            status: 'success',
+            progress: 100,
+            output: {
+              rigged_model: 'https://example.com/rigged-animated.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'anim-task-animated-1',
+            type: 'animate_retarget',
+            status: 'success',
+            progress: 100,
+            output: {
+              animation_model: 'https://example.com/animated-idle.glb',
+            },
+          }),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoRigMixamo: true,
+        tripoIdleAnimationEnabled: false,
+      },
+    })
+
+    await tripoService.createTaskFromFrontView(
+      `data:image/png;base64,${buffer.toString('base64')}`,
+      { animationMode: 'animated' },
+    )
+
+    const summary = await tripoService.getTaskSummary('task-base-animated-1')
+
+    expect(createRigTask).toHaveBeenCalledTimes(1)
+    expect(createAnimationTask).toHaveBeenCalledWith({
+      originalModelTaskId: 'rig-task-animated-1',
+      animation: 'idle',
+      taskType: 'animate_model',
+    })
+    expect(summary.taskId).toBe('anim-task-animated-1')
+    expect(summary.outputs).toEqual({
+      modelUrl: '/api/tripo/tasks/anim-task-animated-1/model?variant=animation_model',
+      downloadUrl: '/api/tripo/tasks/anim-task-animated-1/model?variant=animation_model',
     })
   })
 })
