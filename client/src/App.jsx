@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
+  createTripoFrontBackTask,
   createTripoFrontTask,
   createTripoTask,
   generateMultiview,
@@ -30,6 +31,7 @@ const EMPTY_JOB = {
   progress: 0,
   error: '',
   outputs: null,
+  animationMode: '',
 }
 
 const hasCompleteTurnaround = (views) =>
@@ -54,6 +56,16 @@ const DEV_PRESETS = {
 }
 
 const MULTIVIEW_ORDER = ['front', 'back', 'left', 'right']
+const MODEL_VIEW_CAPTURE_ORDER = [
+  { key: 'front', label: 'Front' },
+  { key: 'back', label: 'Back' },
+  { key: 'sideLeft', label: 'SideLeft' },
+  { key: 'sideRight', label: 'SideRight' },
+  { key: 'frontRight', label: 'FrontRight' },
+  { key: 'frontLeft', label: 'FrontLeft' },
+  { key: 'backtRight', label: 'BacktRight' },
+  { key: 'backtLeft', label: 'BacktLeft' },
+]
 
 const mimeTypeToExtension = (mimeType = 'image/png') => {
   if (mimeType.includes('jpeg') || mimeType.includes('jpg')) {
@@ -81,6 +93,11 @@ const formatModelLabel = (value) => {
   return trimmed || 'Not generated yet.'
 }
 
+const normalizeAnimationMode = (value) => {
+  const normalizedValue = String(value || '').trim().toLowerCase()
+  return normalizedValue === 'animated' || normalizedValue === 'static' ? normalizedValue : ''
+}
+
 function App() {
   const [initialSession] = useState(() => loadPersistedSession())
   const [prompt, setPrompt] = useState(() => initialSession?.prompt || '')
@@ -99,19 +116,30 @@ function App() {
   )
   const [multiviewResult, setMultiviewResult] = useState(() => initialSession?.multiviewResult || null)
   const [spriteResult, setSpriteResult] = useState(() => initialSession?.spriteResult || null)
-  const [tripoJob, setTripoJob] = useState(() => initialSession?.tripoJob || EMPTY_JOB)
+  const [tripoJob, setTripoJob] = useState(() => ({
+    ...EMPTY_JOB,
+    ...(initialSession?.tripoJob || {}),
+    animationMode:
+      normalizeAnimationMode(initialSession?.tripoJob?.animationMode) ||
+      normalizeAnimationMode(initialSession?.devSettings?.tripoAnimationMode),
+  }))
   const [history, setHistory] = useState(() => initialSession?.history || [])
   const [currentRunId, setCurrentRunId] = useState(() => initialSession?.currentRunId || '')
   const [error, setError] = useState('')
   const [isGeneratingPortrait, setIsGeneratingPortrait] = useState(false)
   const [turnaroundGenerationMode, setTurnaroundGenerationMode] = useState('')
   const [isCreatingModel, setIsCreatingModel] = useState(false)
+  const [isCreatingFrontBackModel, setIsCreatingFrontBackModel] = useState(false)
   const [isCreatingFrontModel, setIsCreatingFrontModel] = useState(false)
   const [isGeneratingSprite, setIsGeneratingSprite] = useState(false)
   const [isRefreshingTripoJob, setIsRefreshingTripoJob] = useState(false)
   const [hasHydratedPersistedSession, setHasHydratedPersistedSession] = useState(false)
   const [viewerResetSignal, setViewerResetSignal] = useState(0)
   const [isDevPanelOpen, setIsDevPanelOpen] = useState(false)
+  const [modelViewPack, setModelViewPack] = useState(null)
+  const [isCapturingModelViews, setIsCapturingModelViews] = useState(false)
+  const viewerCaptureApiRef = useRef(null)
+  const hasModelViewPack = MODEL_VIEW_CAPTURE_ORDER.some((view) => Boolean(modelViewPack?.[view.key]?.dataUrl))
 
   const currentPipelineState = error
     ? 'Attention needed'
@@ -125,19 +153,21 @@ function App() {
           ? 'Generating sprite run'
           : isCreatingModel
             ? 'Submitting multiview model'
-            : isCreatingFrontModel
-              ? 'Submitting front-view model'
-              : isRefreshingTripoJob
-                ? 'Refreshing Tripo result'
-                : tripoJob.status === 'success'
-                  ? '3D model ready'
-                  : tripoJob.status === 'running'
-                    ? 'Tripo is building the model'
-                    : tripoJob.status === 'queued'
-                      ? 'Tripo task queued'
-                      : portraitResult?.imageDataUrl
-                        ? 'Portrait ready for next step'
-                        : 'Ready for a new character'
+            : isCreatingFrontBackModel
+              ? 'Submitting front-back model'
+              : isCreatingFrontModel
+                ? 'Submitting front-view model'
+                : isRefreshingTripoJob
+                  ? 'Refreshing Tripo result'
+                  : tripoJob.status === 'success'
+                    ? '3D model ready'
+                    : tripoJob.status === 'running'
+                      ? 'Tripo is building the model'
+                      : tripoJob.status === 'queued'
+                        ? 'Tripo task queued'
+                        : portraitResult?.imageDataUrl
+                          ? 'Portrait ready for next step'
+                          : 'Ready for a new character'
 
   const pipelineSummary = tripoJob.taskId
     ? `${tripoJob.status.toUpperCase()}${tripoJob.progress ? ` ${tripoJob.progress}%` : ''}`
@@ -189,7 +219,13 @@ function App() {
         )
         setTripoJob((currentTripoJob) =>
           session.tripoJob?.taskId || session.tripoJob?.status !== 'idle' || session.tripoJob?.outputs
-            ? session.tripoJob
+            ? {
+                ...EMPTY_JOB,
+                ...session.tripoJob,
+                animationMode:
+                  normalizeAnimationMode(session.tripoJob?.animationMode) ||
+                  normalizeAnimationMode(session.devSettings?.tripoAnimationMode),
+              }
             : currentTripoJob,
         )
       })
@@ -233,6 +269,14 @@ function App() {
     tripoJob,
   ])
 
+  useEffect(() => {
+    setModelViewPack(null)
+  }, [tripoJob.outputs?.modelUrl])
+
+  const handleViewerCaptureApiReady = useCallback((captureApi) => {
+    viewerCaptureApiRef.current = captureApi || null
+  }, [])
+
   const applyTripoJobUpdate = (nextJob, runId = currentRunId) => {
     setTripoJob((currentJob) => ({ ...currentJob, ...nextJob }))
     if (runId) {
@@ -246,8 +290,8 @@ function App() {
     }
   }
 
-  const refreshTripoJob = async (taskId) => {
-    const nextJob = await getTripoTask(taskId)
+  const refreshTripoJob = async (taskId, animationMode = '') => {
+    const nextJob = await getTripoTask(taskId, animationMode)
 
     return nextJob
   }
@@ -268,7 +312,10 @@ function App() {
       isPolling = true
 
       try {
-        const nextJob = await refreshTripoJob(tripoJob.taskId)
+        const nextJob = await refreshTripoJob(
+          tripoJob.taskId,
+          tripoJob.animationMode || devSettings.tripoAnimationMode,
+        )
         if (isCancelled) {
           return
         }
@@ -293,7 +340,7 @@ function App() {
       isCancelled = true
       window.clearInterval(intervalId)
     }
-  }, [currentRunId, tripoJob.taskId, tripoJob.status])
+  }, [currentRunId, devSettings.tripoAnimationMode, tripoJob.animationMode, tripoJob.taskId, tripoJob.status])
 
   const handleGeneratePortrait = async () => {
     if (!prompt.trim() && !referenceImage?.file) {
@@ -431,6 +478,7 @@ function App() {
         progress: 0,
         error: '',
         outputs: null,
+        animationMode: devSettings.tripoAnimationMode,
       })
 
       if (currentRunId) {
@@ -471,6 +519,7 @@ function App() {
         progress: 0,
         error: '',
         outputs: null,
+        animationMode: devSettings.tripoAnimationMode,
       })
 
       if (currentRunId) {
@@ -499,7 +548,53 @@ function App() {
     setCurrentRunId('')
     setError('')
     setTurnaroundGenerationMode('')
+    setModelViewPack(null)
     clearPersistedSession()
+  }
+
+  const handleCreateFrontBackModel = async () => {
+    const frontImageDataUrl = multiviewResult?.views?.front?.imageDataUrl
+    const backImageDataUrl = multiviewResult?.views?.back?.imageDataUrl
+
+    if (!frontImageDataUrl || !backImageDataUrl) {
+      setError('Generate front and back views before creating a 3D model from them.')
+      return
+    }
+
+    setError('')
+    setIsCreatingFrontBackModel(true)
+
+    try {
+      const result = await createTripoFrontBackTask({
+        views: {
+          front: frontImageDataUrl,
+          back: backImageDataUrl,
+        },
+        animationMode: devSettings.tripoAnimationMode,
+      })
+
+      setTripoJob({
+        taskId: result.taskId,
+        status: result.status,
+        progress: 0,
+        error: '',
+        outputs: null,
+        animationMode: devSettings.tripoAnimationMode,
+      })
+
+      if (currentRunId) {
+        setHistory((currentHistory) =>
+          updateHistoryEntry(currentHistory, currentRunId, {
+            tripoTaskId: result.taskId,
+            tripoStatus: result.status,
+          }),
+        )
+      }
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setIsCreatingFrontBackModel(false)
+    }
   }
 
   const handleDownloadModel = async () => {
@@ -519,7 +614,10 @@ function App() {
     setIsRefreshingTripoJob(true)
 
     try {
-      const nextJob = await refreshTripoJob(tripoJob.taskId)
+      const nextJob = await refreshTripoJob(
+        tripoJob.taskId,
+        tripoJob.animationMode || devSettings.tripoAnimationMode,
+      )
       applyTripoJobUpdate(nextJob)
     } catch (requestError) {
       setError(requestError.message)
@@ -558,6 +656,47 @@ function App() {
       const extension = getDataUrlFileExtension(view.dataUrl)
       const runSuffix = currentRunId || 'session'
       downloadDataUrl(view.dataUrl, `multiview-${runSuffix}-${view.direction}.${extension}`)
+      await new Promise((resolve) => window.setTimeout(resolve, 120))
+    }
+  }
+
+  const handleCaptureModelViews = async () => {
+    const captureApi = viewerCaptureApiRef.current
+
+    if (!captureApi?.captureEightViews) {
+      setError('3D viewer is not ready for screenshot capture yet.')
+      return
+    }
+
+    setError('')
+    setIsCapturingModelViews(true)
+
+    try {
+      const captures = await captureApi.captureEightViews()
+      setModelViewPack(captures)
+    } catch (requestError) {
+      setError(requestError?.message || 'Failed to capture model view screenshots.')
+    } finally {
+      setIsCapturingModelViews(false)
+    }
+  }
+
+  const handleDownloadModelViews = async () => {
+    if (!hasModelViewPack) {
+      setError('Generate model screenshots first.')
+      return
+    }
+
+    setError('')
+    const runSuffix = currentRunId || tripoJob.taskId || 'session'
+
+    for (const view of MODEL_VIEW_CAPTURE_ORDER) {
+      const screenshot = modelViewPack?.[view.key]
+      if (!screenshot?.dataUrl) {
+        continue
+      }
+
+      downloadDataUrl(screenshot.dataUrl, `model-view-${runSuffix}-${view.label.toLowerCase()}.png`)
       await new Promise((resolve) => window.setTimeout(resolve, 120))
     }
   }
@@ -630,6 +769,7 @@ function App() {
                   <ModelViewer
                     modelUrl={tripoJob.outputs.modelUrl}
                     resetSignal={viewerResetSignal}
+                    onCaptureApiReady={handleViewerCaptureApiReady}
                   />
                 </Suspense>
               ) : (
@@ -642,13 +782,20 @@ function App() {
             <TripoJobPanel
               embedded
               showMeta={false}
+              showUtilityActions={false}
               job={tripoJob}
               canCreateModel={hasCompleteTurnaround(multiviewResult?.views)}
+              canCreateFrontBackModel={Boolean(
+                multiviewResult?.views?.front?.imageDataUrl &&
+                  multiviewResult?.views?.back?.imageDataUrl,
+              )}
               canCreateFrontModel={Boolean(multiviewResult?.views?.front?.imageDataUrl)}
               isCreatingModel={isCreatingModel}
+              isCreatingFrontBackModel={isCreatingFrontBackModel}
               isCreatingFrontModel={isCreatingFrontModel}
               isRefreshingJob={isRefreshingTripoJob}
               onCreateModel={handleCreateModel}
+              onCreateFrontBackModel={handleCreateFrontBackModel}
               onCreateFrontModel={handleCreateFrontModel}
               onForcePullResult={handleForcePullResult}
               onDownloadModel={handleDownloadModel}
@@ -827,6 +974,74 @@ function App() {
                 </p>
                 {tripoJob.error ? <p className="error-copy">{tripoJob.error}</p> : null}
               </div>
+              <div className="action-row action-row--compact action-row--dev">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  disabled={!tripoJob.taskId || isRefreshingTripoJob}
+                  onClick={handleForcePullResult}
+                >
+                  {isRefreshingTripoJob ? 'Pulling Result...' : 'Force Pull Result'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!tripoJob.outputs?.downloadUrl}
+                  onClick={handleDownloadModel}
+                >
+                  Download GLB
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  disabled={!tripoJob.outputs?.modelUrl}
+                  onClick={handleResetView}
+                >
+                  Reset View
+                </button>
+              </div>
+            </div>
+            <div className="dev-panel__field">
+              <span>Model Views</span>
+              <div className="action-row action-row--compact action-row--dev">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={handleCaptureModelViews}
+                  disabled={!tripoJob.outputs?.modelUrl || isCapturingModelViews}
+                >
+                  {isCapturingModelViews ? 'Capturing 8 views...' : 'Capture 8 Views'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={handleDownloadModelViews}
+                  disabled={!hasModelViewPack}
+                >
+                  Download 8 Views
+                </button>
+              </div>
+              {hasModelViewPack ? (
+                <div className="dev-viewpack-grid">
+                  {MODEL_VIEW_CAPTURE_ORDER.map((view) => {
+                    const screenshot = modelViewPack?.[view.key]
+                    if (!screenshot?.dataUrl) {
+                      return null
+                    }
+
+                    return (
+                      <div key={view.key} className="dev-viewpack-item">
+                        <img src={screenshot.dataUrl} alt={`${view.label} model screenshot`} />
+                        <p>{view.label}</p>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="dev-panel__status">
+                  <p>No model screenshots captured yet.</p>
+                </div>
+              )}
             </div>
           </div>
         </aside>
@@ -836,3 +1051,4 @@ function App() {
 }
 
 export default App
+

@@ -44,6 +44,7 @@ const noopMultiviewService = {
 
 const noopTripoService = {
   createTaskFromViews: vi.fn(),
+  createTaskFromFrontBackViews: vi.fn(),
   createTaskFromFrontView: vi.fn(),
   getTaskSummary: vi.fn(),
   getModelAsset: vi.fn(),
@@ -486,6 +487,112 @@ describe('tripoService', () => {
     )
   })
 
+  it('uploads front+back views in front-back order', async () => {
+    const makeDataUrl = async (color) => {
+      const buffer = await sharp({
+        create: {
+          width: 1,
+          height: 1,
+          channels: 3,
+          background: color,
+        },
+      })
+        .png()
+        .toBuffer()
+
+      return `data:image/png;base64,${buffer.toString('base64')}`
+    }
+
+    const uploadImageBuffer = vi
+      .fn()
+      .mockResolvedValueOnce({ file_token: 'front-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'back-token', type: 'jpg' })
+    const createMultiviewTask = vi.fn().mockResolvedValue('task-front-back-123')
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer,
+        createMultiviewTask,
+        createImageTask: vi.fn(),
+        getTask: vi.fn(),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: TEST_CONFIG,
+    })
+
+    const result = await tripoService.createTaskFromFrontBackViews({
+      front: await makeDataUrl({ r: 255, g: 0, b: 0 }),
+      back: await makeDataUrl({ r: 0, g: 255, b: 0 }),
+    })
+
+    expect(uploadImageBuffer).toHaveBeenCalledTimes(2)
+    expect(createMultiviewTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [
+          { file_token: 'front-token', type: 'jpg' },
+          { file_token: 'back-token', type: 'jpg' },
+        ],
+      }),
+    )
+    expect(result).toEqual({
+      taskId: 'task-front-back-123',
+      status: 'queued',
+    })
+  })
+
+  it('falls back to four slots with empty left/right placeholders when Tripo rejects two-image front+back payload', async () => {
+    const makeDataUrl = async (color) => {
+      const buffer = await sharp({
+        create: {
+          width: 1,
+          height: 1,
+          channels: 3,
+          background: color,
+        },
+      })
+        .png()
+        .toBuffer()
+
+      return `data:image/png;base64,${buffer.toString('base64')}`
+    }
+
+    const frontUpload = { file_token: 'front-token', type: 'jpg' }
+    const backUpload = { file_token: 'back-token', type: 'jpg' }
+    const uploadImageBuffer = vi.fn().mockResolvedValueOnce(frontUpload).mockResolvedValueOnce(backUpload)
+    const createMultiviewTask = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Tripo request failed: One or more of your parameter is invalid'))
+      .mockResolvedValueOnce('task-front-back-fallback-1')
+
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer,
+        createMultiviewTask,
+        createImageTask: vi.fn(),
+        getTask: vi.fn(),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: TEST_CONFIG,
+    })
+
+    const result = await tripoService.createTaskFromFrontBackViews({
+      front: await makeDataUrl({ r: 255, g: 0, b: 0 }),
+      back: await makeDataUrl({ r: 0, g: 255, b: 0 }),
+    })
+
+    expect(createMultiviewTask).toHaveBeenCalledTimes(2)
+    expect(createMultiviewTask.mock.calls[0][0].files).toEqual([frontUpload, backUpload])
+    expect(createMultiviewTask.mock.calls[1][0].files).toEqual([
+      frontUpload,
+      backUpload,
+      {},
+      {},
+    ])
+    expect(result).toEqual({
+      taskId: 'task-front-back-fallback-1',
+      status: 'queued',
+    })
+  })
+
   it('creates image-to-model tasks from a single front image', async () => {
     const buffer = await sharp({
       create: {
@@ -711,7 +818,7 @@ describe('tripoService', () => {
     })
   })
 
-  it('skips idle animation task when static mode is requested', async () => {
+  it('skips rig and animation tasks when static mode is requested', async () => {
     const buffer = await sharp({
       create: {
         width: 1,
@@ -770,12 +877,54 @@ describe('tripoService', () => {
 
     const summary = await tripoService.getTaskSummary('task-base-static-1')
 
-    expect(createRigTask).toHaveBeenCalledTimes(1)
+    expect(createRigTask).not.toHaveBeenCalled()
     expect(createAnimationTask).not.toHaveBeenCalled()
-    expect(summary.taskId).toBe('rig-task-static-1')
+    expect(summary.taskId).toBe('task-base-static-1')
     expect(summary.outputs).toEqual({
-      modelUrl: '/api/tripo/tasks/rig-task-static-1/model?variant=rigged_model',
-      downloadUrl: '/api/tripo/tasks/rig-task-static-1/model?variant=rigged_model',
+      modelUrl: '/api/tripo/tasks/task-base-static-1/model?variant=model',
+      downloadUrl: '/api/tripo/tasks/task-base-static-1/model?variant=model',
+    })
+  })
+
+  it('honors static mode override for untracked tasks during polling', async () => {
+    const createRigTask = vi.fn().mockResolvedValue('rig-task-overridden-static-1')
+    const createAnimationTask = vi.fn().mockResolvedValue('anim-task-overridden-static-1')
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer: vi.fn(),
+        createMultiviewTask: vi.fn(),
+        createImageTask: vi.fn(),
+        createRigTask,
+        createAnimationTask,
+        getTask: vi.fn().mockResolvedValue({
+          task_id: 'task-base-overridden-static-1',
+          type: 'multiview_to_model',
+          status: 'success',
+          progress: 100,
+          output: {
+            model: 'https://example.com/base-overridden-static.glb',
+          },
+        }),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoRigMixamo: true,
+        tripoIdleAnimationEnabled: true,
+      },
+    })
+
+    const summary = await tripoService.getTaskSummary('task-base-overridden-static-1', {
+      animationMode: 'static',
+    })
+
+    expect(createRigTask).not.toHaveBeenCalled()
+    expect(createAnimationTask).not.toHaveBeenCalled()
+    expect(summary.taskId).toBe('task-base-overridden-static-1')
+    expect(summary.outputs).toEqual({
+      modelUrl: '/api/tripo/tasks/task-base-overridden-static-1/model?variant=model&animationMode=static',
+      downloadUrl:
+        '/api/tripo/tasks/task-base-overridden-static-1/model?variant=model&animationMode=static',
     })
   })
 

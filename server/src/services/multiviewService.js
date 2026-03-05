@@ -78,6 +78,7 @@ export const createMultiviewService = ({
           frontPrompt: buildViewPrompt({ view: 'front', characterPrompt, multiviewPrompt: multiviewPromptBase }),
           backPrompt: buildViewPrompt({ view: 'back', characterPrompt, multiviewPrompt: multiviewPromptBase }),
           leftPrompt: buildViewPrompt({ view: 'left', characterPrompt, multiviewPrompt: multiviewPromptBase }),
+          rightPrompt: buildViewPrompt({ view: 'right', characterPrompt, multiviewPrompt: multiviewPromptBase }),
           multiviewPromptBase,
         },
       }
@@ -123,6 +124,7 @@ export const createMultiviewService = ({
         frontPrompt: buildViewPrompt({ view: 'front', characterPrompt, multiviewPrompt: multiviewPromptBase }),
         backPrompt: buildViewPrompt({ view: 'back', characterPrompt, multiviewPrompt: multiviewPromptBase }),
         leftPrompt: buildViewPrompt({ view: 'left', characterPrompt, multiviewPrompt: multiviewPromptBase }),
+        rightPrompt: buildViewPrompt({ view: 'right', characterPrompt, multiviewPrompt: multiviewPromptBase }),
         multiviewPromptBase,
       },
     }

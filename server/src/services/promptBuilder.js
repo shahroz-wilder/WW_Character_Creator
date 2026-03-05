@@ -75,5 +75,16 @@ export const buildViewPrompt = ({ view, characterPrompt, multiviewPrompt }) => {
     specificViewLabel,
   )
 
-  return viewSpecificPrompt.trim()
+  const directionalConstraint =
+    view === 'left'
+      ? "Character-left profile only. This is the character's LEFT side."
+      : view === 'right'
+        ? "Character-right profile only. This is the character's RIGHT side."
+        : view === 'front'
+          ? 'Character front view only.'
+          : view === 'back'
+            ? 'Character back view only.'
+            : ''
+
+  return `${viewSpecificPrompt.trim()} ${directionalConstraint}`.trim()
 }

@@ -6,6 +6,17 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { retargetClip } from 'three/examples/jsm/utils/SkeletonUtils.js'
 
+const VIEW_CAPTURE_PRESETS = [
+  { key: 'front', label: 'Front', yawDeg: 0 },
+  { key: 'back', label: 'Back', yawDeg: 180 },
+  { key: 'sideLeft', label: 'SideLeft', yawDeg: 90 },
+  { key: 'sideRight', label: 'SideRight', yawDeg: -90 },
+  { key: 'frontRight', label: 'FrontRight', yawDeg: -45 },
+  { key: 'frontLeft', label: 'FrontLeft', yawDeg: 45 },
+  { key: 'backtRight', label: 'BacktRight', yawDeg: -135 },
+  { key: 'backtLeft', label: 'BacktLeft', yawDeg: 135 },
+]
+
 const fitCameraToObject = (camera, controls, object) => {
   const box = new THREE.Box3().setFromObject(object)
   const size = box.getSize(new THREE.Vector3())
@@ -73,9 +84,10 @@ const chooseIdleLikeClip = (clips = []) => {
   return idleLikeClip || clips[0]
 }
 
-export function ModelViewer({ modelUrl, resetSignal = 0 }) {
+export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = null }) {
   const containerRef = useRef(null)
   const controlsRef = useRef(null)
+  const isCapturingSnapshotsRef = useRef(false)
   const [isLoading, setIsLoading] = useState(true)
   const [viewerError, setViewerError] = useState('')
 
@@ -92,26 +104,33 @@ export function ModelViewer({ modelUrl, resetSignal = 0 }) {
     scene.background = new THREE.Color('#d7dbd6')
 
     const camera = new THREE.PerspectiveCamera(35, container.clientWidth / container.clientHeight, 0.01, 100)
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
     renderer.setPixelRatio(window.devicePixelRatio)
     renderer.setSize(container.clientWidth, container.clientHeight, false)
+    if (typeof renderer.setClearColor === 'function') {
+      renderer.setClearColor(0x000000, 0)
+    }
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.toneMapping = THREE.ACESFilmicToneMapping
-    renderer.toneMappingExposure = 1.1
+    renderer.toneMappingExposure = 0.88
     container.appendChild(renderer.domElement)
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer)
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
 
-    const keyLight = new THREE.DirectionalLight('#fff1df', 2.4)
-    keyLight.position.set(3, 4, 6)
+    const keyLight = new THREE.DirectionalLight('#fff3e5', 1.55)
+    keyLight.position.set(2.7, 3.5, 5.4)
     scene.add(keyLight)
 
-    const rimLight = new THREE.DirectionalLight('#8fcfba', 1.2)
-    rimLight.position.set(-4, 2, -3)
+    const fillLight = new THREE.DirectionalLight('#cdd9ff', 0.42)
+    fillLight.position.set(-3.4, 1.9, 2.6)
+    scene.add(fillLight)
+
+    const rimLight = new THREE.DirectionalLight('#88c8b6', 0.7)
+    rimLight.position.set(-4.2, 2.1, -3.2)
     scene.add(rimLight)
 
-    const ambientLight = new THREE.AmbientLight('#ffffff', 0.65)
+    const ambientLight = new THREE.AmbientLight('#ffffff', 0.34)
     scene.add(ambientLight)
 
     const controls = new OrbitControls(camera, renderer.domElement)
@@ -125,9 +144,73 @@ export function ModelViewer({ modelUrl, resetSignal = 0 }) {
     const loader = new GLTFLoader()
     const fbxLoader = new FBXLoader()
     let loadedScene = null
+    let hasLoadedModel = false
     let mixer = null
     let targetSkinnedMesh = null
     const clock = new THREE.Clock()
+    const worldUp = new THREE.Vector3(0, 1, 0)
+
+    const captureEightViews = async () => {
+      if (!loadedScene || !hasLoadedModel) {
+        throw new Error('3D model is still loading. Try again in a moment.')
+      }
+
+      const originalTarget = controls.target.clone()
+      const originalPosition = camera.position.clone()
+      const originalQuaternion = camera.quaternion.clone()
+      const offset = originalPosition.clone().sub(originalTarget)
+      const baseHorizontal = new THREE.Vector3(offset.x, 0, offset.z)
+
+      const horizontalDistance =
+        baseHorizontal.length() > 0.0001 ? baseHorizontal.length() : Math.max(offset.length(), 2)
+      const verticalOffset = offset.y
+      if (baseHorizontal.lengthSq() < 0.0000001) {
+        baseHorizontal.set(0, 0, 1)
+      } else {
+        baseHorizontal.normalize()
+      }
+
+      const screenshots = {}
+      const originalBackground = scene.background
+
+      isCapturingSnapshotsRef.current = true
+      try {
+        scene.background = null
+
+        for (const preset of VIEW_CAPTURE_PRESETS) {
+          const direction = baseHorizontal
+            .clone()
+            .applyAxisAngle(worldUp, THREE.MathUtils.degToRad(preset.yawDeg))
+            .normalize()
+
+          camera.position.copy(originalTarget).addScaledVector(direction, horizontalDistance)
+          camera.position.y = originalTarget.y + verticalOffset
+          camera.lookAt(originalTarget)
+          controls.target.copy(originalTarget)
+          controls.update()
+          renderer.render(scene, camera)
+
+          screenshots[preset.key] = {
+            label: preset.label,
+            dataUrl: renderer.domElement.toDataURL('image/png'),
+          }
+        }
+      } finally {
+        scene.background = originalBackground
+        camera.position.copy(originalPosition)
+        camera.quaternion.copy(originalQuaternion)
+        controls.target.copy(originalTarget)
+        controls.update()
+        renderer.render(scene, camera)
+        isCapturingSnapshotsRef.current = false
+      }
+
+      return screenshots
+    }
+
+    if (typeof onCaptureApiReady === 'function') {
+      onCaptureApiReady({ captureEightViews })
+    }
 
     loader.load(
       modelUrl,
@@ -135,6 +218,7 @@ export function ModelViewer({ modelUrl, resetSignal = 0 }) {
         loadedScene = gltf.scene
         scene.add(loadedScene)
         fitCameraToObject(camera, controls, loadedScene)
+        hasLoadedModel = true
         targetSkinnedMesh = findFirstSkinnedMesh(loadedScene)
         const embeddedClip = chooseIdleLikeClip(gltf.animations || [])
 
@@ -211,13 +295,16 @@ export function ModelViewer({ modelUrl, resetSignal = 0 }) {
     renderer.setAnimationLoop(() => {
       controls.update()
       const delta = clock.getDelta()
-      if (mixer && delta > 0) {
+      if (mixer && delta > 0 && !isCapturingSnapshotsRef.current) {
         mixer.update(Math.min(delta, 0.05))
       }
       renderer.render(scene, camera)
     })
 
     return () => {
+      if (typeof onCaptureApiReady === 'function') {
+        onCaptureApiReady(null)
+      }
       resizeObserver.disconnect()
       renderer.setAnimationLoop(null)
       controls.dispose()
@@ -236,7 +323,7 @@ export function ModelViewer({ modelUrl, resetSignal = 0 }) {
         container.removeChild(renderer.domElement)
       }
     }
-  }, [modelUrl])
+  }, [modelUrl, onCaptureApiReady])
 
   useEffect(() => {
     if (resetSignal > 0 && controlsRef.current) {

@@ -28,9 +28,23 @@ export const createTripoRouter = ({ tripoService }) => {
     }
   })
 
+  router.post('/tasks/front-back', async (req, res) => {
+    try {
+      const result = await tripoService.createTaskFromFrontBackViews(req.body?.views, {
+        animationMode: req.body?.animationMode,
+      })
+      res.json(result)
+    } catch (error) {
+      const { statusCode, body } = toErrorResponse(error)
+      res.status(statusCode).json(body)
+    }
+  })
+
   router.get('/tasks/:taskId', async (req, res) => {
     try {
-      const summary = await tripoService.getTaskSummary(req.params.taskId)
+      const summary = await tripoService.getTaskSummary(req.params.taskId, {
+        animationMode: req.query?.animationMode,
+      })
       res.json({
         taskId: summary.taskId,
         status: summary.status,
@@ -46,7 +60,9 @@ export const createTripoRouter = ({ tripoService }) => {
 
   router.get('/tasks/:taskId/model', async (req, res) => {
     try {
-      const asset = await tripoService.getModelAsset(req.params.taskId, req.query.variant)
+      const asset = await tripoService.getModelAsset(req.params.taskId, req.query.variant, {
+        animationMode: req.query?.animationMode,
+      })
       const contentType = asset.response.headers.get('content-type') || 'model/gltf-binary'
       const contentLength = asset.response.headers.get('content-length')
 

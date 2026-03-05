@@ -44,8 +44,20 @@ const parseAnimationModeOverride = (animationMode) => {
   return null
 }
 
-const buildTaskSummary = ({ taskId, task }) => {
+const normalizeAnimationModeParam = (animationMode) => {
+  const normalizedValue = String(animationMode || '').trim().toLowerCase()
+
+  if (normalizedValue === 'animated' || normalizedValue === 'static') {
+    return normalizedValue
+  }
+
+  return ''
+}
+
+const buildTaskSummary = ({ taskId, task, animationMode }) => {
   const selectedOutput = selectModelVariant(task)
+  const modeParam = normalizeAnimationModeParam(animationMode)
+  const animationModeSuffix = modeParam ? `&animationMode=${modeParam}` : ''
 
   return {
     taskId,
@@ -54,8 +66,8 @@ const buildTaskSummary = ({ taskId, task }) => {
     error: task?.error_msg || null,
     outputs: selectedOutput
       ? {
-          modelUrl: `/api/tripo/tasks/${taskId}/model?variant=${selectedOutput.variant}`,
-          downloadUrl: `/api/tripo/tasks/${taskId}/model?variant=${selectedOutput.variant}`,
+          modelUrl: `/api/tripo/tasks/${taskId}/model?variant=${selectedOutput.variant}${animationModeSuffix}`,
+          downloadUrl: `/api/tripo/tasks/${taskId}/model?variant=${selectedOutput.variant}${animationModeSuffix}`,
         }
       : null,
   }
@@ -65,6 +77,7 @@ export const createTripoService = ({ tripoClient, config }) => {
   const rigTaskBySourceTaskId = new Map()
   const sourceTaskByRigTaskId = new Map()
   const rigTaskStartPromises = new Map()
+  const rigEnabledByTaskId = new Map()
   const animationTaskBySourceTaskId = new Map()
   const sourceTaskByAnimationTaskId = new Map()
   const animationTaskStartPromises = new Map()
@@ -78,7 +91,39 @@ export const createTripoService = ({ tripoClient, config }) => {
     return override === null ? isIdleAnimationEnabled : override
   }
 
-  const getAnimationEnabledForTask = (taskId) => {
+  const resolveRigPreference = (animationMode, shouldAnimate) => {
+    const override = parseAnimationModeOverride(animationMode)
+
+    if (override !== null) {
+      return override
+    }
+
+    if (shouldAnimate) {
+      return true
+    }
+
+    return isMixamoRiggingEnabled
+  }
+
+  const getRigEnabledForTask = (taskId, animationMode) => {
+    const override = parseAnimationModeOverride(animationMode)
+    if (override !== null) {
+      return override
+    }
+
+    if (rigEnabledByTaskId.has(taskId)) {
+      return rigEnabledByTaskId.get(taskId)
+    }
+
+    return isMixamoRiggingEnabled
+  }
+
+  const getAnimationEnabledForTask = (taskId, animationMode) => {
+    const override = parseAnimationModeOverride(animationMode)
+    if (override !== null) {
+      return override
+    }
+
     if (animationEnabledByTaskId.has(taskId)) {
       return animationEnabledByTaskId.get(taskId)
     }
@@ -89,6 +134,7 @@ export const createTripoService = ({ tripoClient, config }) => {
   const rememberRigTask = (sourceTaskId, rigTaskId) => {
     rigTaskBySourceTaskId.set(sourceTaskId, rigTaskId)
     sourceTaskByRigTaskId.set(rigTaskId, sourceTaskId)
+    rigEnabledByTaskId.set(rigTaskId, true)
     animationEnabledByTaskId.set(rigTaskId, getAnimationEnabledForTask(sourceTaskId))
   }
 
@@ -161,19 +207,20 @@ export const createTripoService = ({ tripoClient, config }) => {
     return startPromise
   }
 
-  const resolveTaskForOutput = async (taskId) => {
+  const resolveTaskForOutput = async (taskId, { animationMode } = {}) => {
     let resolvedTaskId = taskId
     let task = await tripoClient.getTask(taskId)
     const isRigTask = sourceTaskByRigTaskId.has(taskId) || task?.type === 'animate_rig'
     const isAnimationTask = sourceTaskByAnimationTaskId.has(taskId)
 
-    if (!isAnimationTask && isMixamoRiggingEnabled && !isRigTask && task?.status === 'success') {
+    const shouldRig = getRigEnabledForTask(taskId, animationMode)
+    if (!isAnimationTask && shouldRig && !isRigTask && task?.status === 'success') {
       const rigTaskId = await ensureRigTaskForSource(taskId)
       resolvedTaskId = rigTaskId
       task = await tripoClient.getTask(rigTaskId)
     }
 
-    const shouldAnimate = getAnimationEnabledForTask(resolvedTaskId)
+    const shouldAnimate = getAnimationEnabledForTask(resolvedTaskId, animationMode)
     if (isAnimationTask || !shouldAnimate || task?.status !== 'success') {
       return { taskId: resolvedTaskId, task }
     }
@@ -188,37 +235,86 @@ export const createTripoService = ({ tripoClient, config }) => {
     }
   }
 
+  const buildGenerationOptions = () => ({
+    model_version: config.tripoModelVersion,
+    texture: config.tripoTexture,
+    pbr: config.tripoPbr,
+    texture_quality: config.tripoTextureQuality,
+    texture_alignment: config.tripoTextureAlignment,
+    orientation: config.tripoOrientation,
+  })
+
+  const isTripoInvalidParameterError = (error) =>
+    /parameter/i.test(String(error?.message || '')) && /invalid/i.test(String(error?.message || ''))
+
+  const uploadOrderedViews = async (viewDataUrls, orderedViewNames) => {
+    const uploadedFiles = []
+
+    for (const viewName of orderedViewNames) {
+      const imageDataUrl = viewDataUrls?.[viewName]
+      if (!imageDataUrl) {
+        throw new AppError(`Missing ${viewName} image for Tripo generation.`, 400)
+      }
+
+      const { buffer } = parseImageDataUrl(imageDataUrl)
+      const normalizedBuffer = await normalizeForTripo(buffer)
+      const uploadToken = await tripoClient.uploadImageBuffer(normalizedBuffer, 'image/jpeg')
+      uploadedFiles.push(uploadToken)
+    }
+
+    return uploadedFiles
+  }
+
   return {
     async createTaskFromViews(viewDataUrls, { animationMode } = {}) {
       // Use Tripo API semantic order: front, back, left, right.
       const orderedViewNames = ['front', 'back', 'left', 'right']
-      const uploadedFiles = []
       const shouldAnimate = resolveAnimationPreference(animationMode)
+      const shouldRig = resolveRigPreference(animationMode, shouldAnimate)
 
-      for (const viewName of orderedViewNames) {
-        const imageDataUrl = viewDataUrls?.[viewName]
-        if (!imageDataUrl) {
-          throw new AppError(`Missing ${viewName} image for Tripo generation.`, 400)
-        }
-
-        const { buffer } = parseImageDataUrl(imageDataUrl)
-        const normalizedBuffer = await normalizeForTripo(buffer)
-        const uploadToken = await tripoClient.uploadImageBuffer(normalizedBuffer, 'image/jpeg')
-        uploadedFiles.push(uploadToken)
-      }
+      const uploadedFiles = await uploadOrderedViews(viewDataUrls, orderedViewNames)
 
       const taskId = await tripoClient.createMultiviewTask({
         files: uploadedFiles,
-        options: {
-          model_version: config.tripoModelVersion,
-          texture: config.tripoTexture,
-          pbr: config.tripoPbr,
-          texture_quality: config.tripoTextureQuality,
-          texture_alignment: config.tripoTextureAlignment,
-          orientation: config.tripoOrientation,
-        },
+        options: buildGenerationOptions(),
       })
 
+      rigEnabledByTaskId.set(taskId, shouldRig)
+      animationEnabledByTaskId.set(taskId, shouldAnimate)
+
+      return {
+        taskId,
+        status: 'queued',
+      }
+    },
+    async createTaskFromFrontBackViews(viewDataUrls, { animationMode } = {}) {
+      const orderedViewNames = ['front', 'back']
+      const shouldAnimate = resolveAnimationPreference(animationMode)
+      const shouldRig = resolveRigPreference(animationMode, shouldAnimate)
+      const uploadedFiles = await uploadOrderedViews(viewDataUrls, orderedViewNames)
+      const generationOptions = buildGenerationOptions()
+      let taskId
+
+      try {
+        // Preferred flow: submit strictly front+back.
+        taskId = await tripoClient.createMultiviewTask({
+          files: uploadedFiles,
+          options: generationOptions,
+        })
+      } catch (error) {
+        if (!isTripoInvalidParameterError(error)) {
+          throw error
+        }
+
+        // Compatibility fallback for Tripo variants requiring 4 ordered slots.
+        // Keep front/back only and leave left/right empty.
+        taskId = await tripoClient.createMultiviewTask({
+          files: [uploadedFiles[0], uploadedFiles[1], {}, {}],
+          options: generationOptions,
+        })
+      }
+
+      rigEnabledByTaskId.set(taskId, shouldRig)
       animationEnabledByTaskId.set(taskId, shouldAnimate)
 
       return {
@@ -232,6 +328,7 @@ export const createTripoService = ({ tripoClient, config }) => {
       }
 
       const shouldAnimate = resolveAnimationPreference(animationMode)
+      const shouldRig = resolveRigPreference(animationMode, shouldAnimate)
       const { buffer } = parseImageDataUrl(imageDataUrl)
       const normalizedBuffer = await normalizeForTripo(buffer)
       const uploadToken = await tripoClient.uploadImageBuffer(normalizedBuffer, 'image/jpeg')
@@ -240,16 +337,10 @@ export const createTripoService = ({ tripoClient, config }) => {
           type: 'image',
           file_token: uploadToken.file_token,
         },
-        options: {
-          model_version: config.tripoModelVersion,
-          texture: config.tripoTexture,
-          pbr: config.tripoPbr,
-          texture_quality: config.tripoTextureQuality,
-          texture_alignment: config.tripoTextureAlignment,
-          orientation: config.tripoOrientation,
-        },
+        options: buildGenerationOptions(),
       })
 
+      rigEnabledByTaskId.set(taskId, shouldRig)
       animationEnabledByTaskId.set(taskId, shouldAnimate)
 
       return {
@@ -257,12 +348,15 @@ export const createTripoService = ({ tripoClient, config }) => {
         status: 'queued',
       }
     },
-    async getTaskSummary(taskId) {
-      const resolvedTask = await resolveTaskForOutput(taskId)
-      return buildTaskSummary(resolvedTask)
+    async getTaskSummary(taskId, { animationMode } = {}) {
+      const resolvedTask = await resolveTaskForOutput(taskId, { animationMode })
+      return buildTaskSummary({
+        ...resolvedTask,
+        animationMode,
+      })
     },
-    async getModelAsset(taskId, requestedVariant) {
-      const resolvedTask = await resolveTaskForOutput(taskId)
+    async getModelAsset(taskId, requestedVariant, { animationMode } = {}) {
+      const resolvedTask = await resolveTaskForOutput(taskId, { animationMode })
       const selectedOutput = selectModelVariant(resolvedTask.task)
 
       if (!selectedOutput) {

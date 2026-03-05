@@ -3,11 +3,14 @@ const formatStatus = (status) => status.replace(/_/g, ' ')
 export function TripoJobPanel({
   job,
   canCreateModel,
+  canCreateFrontBackModel,
   canCreateFrontModel,
   isCreatingModel,
+  isCreatingFrontBackModel,
   isCreatingFrontModel,
   isRefreshingJob,
   onCreateModel,
+  onCreateFrontBackModel,
   onCreateFrontModel,
   onForcePullResult,
   onDownloadModel,
@@ -15,6 +18,7 @@ export function TripoJobPanel({
   hasViewer = false,
   embedded = false,
   showMeta = true,
+  showUtilityActions = true,
 }) {
   const Wrapper = embedded ? 'div' : 'section'
   const wrapperClassName = embedded ? 'job-panel job-panel--embedded' : 'panel-card job-panel'
@@ -67,41 +71,53 @@ export function TripoJobPanel({
           disabled={!canCreateModel || isCreatingModel}
           onClick={onCreateModel}
         >
-          {isCreatingModel ? 'Submitting to Tripo...' : 'Create 3D Model'}
-        </button>
-        <button
-          type="button"
-          className="primary-button"
-          disabled={!canCreateFrontModel || isCreatingFrontModel}
-          onClick={onCreateFrontModel}
-        >
-          {isCreatingFrontModel ? 'Submitting Front View...' : 'Create 3D From Front View'}
-        </button>
-        <button
-          type="button"
-          className="ghost-button"
-          disabled={!job.taskId || isRefreshingJob}
-          onClick={onForcePullResult}
-        >
-          {isRefreshingJob ? 'Pulling Result...' : 'Force Pull Result'}
+          {isCreatingModel ? 'Submitting 3D Multiview...' : '3D Multiview'}
         </button>
         <button
           type="button"
           className="secondary-button"
-          disabled={!job.outputs?.downloadUrl}
-          onClick={onDownloadModel}
+          disabled={!canCreateFrontBackModel || isCreatingFrontBackModel}
+          onClick={onCreateFrontBackModel}
         >
-          Download GLB
+          {isCreatingFrontBackModel ? 'Submitting 3D FrontBack...' : '3D FrontBack'}
         </button>
-        {embedded ? (
-          <button
-            type="button"
-            className="ghost-button"
-            disabled={!hasViewer}
-            onClick={onResetView}
-          >
-            Reset View
-          </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={!canCreateFrontModel || isCreatingFrontModel}
+          onClick={onCreateFrontModel}
+        >
+          {isCreatingFrontModel ? 'Submitting 3D Front...' : '3D Front'}
+        </button>
+        {showUtilityActions ? (
+          <>
+            <button
+              type="button"
+              className="ghost-button"
+              disabled={!job.taskId || isRefreshingJob}
+              onClick={onForcePullResult}
+            >
+              {isRefreshingJob ? 'Pulling Result...' : 'Force Pull Result'}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!job.outputs?.downloadUrl}
+              onClick={onDownloadModel}
+            >
+              Download GLB
+            </button>
+            {embedded ? (
+              <button
+                type="button"
+                className="ghost-button"
+                disabled={!hasViewer}
+                onClick={onResetView}
+              >
+                Reset View
+              </button>
+            ) : null}
+          </>
         ) : null}
       </div>
     </Wrapper>

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
 import {
+  createTripoFrontBackTask,
   createTripoFrontTask,
   createTripoTask,
   generateMultiview,
@@ -16,6 +17,7 @@ vi.mock('../api/characterApi', () => ({
   generateMultiview: vi.fn(),
   generateSpriteRun: vi.fn(),
   createTripoTask: vi.fn(),
+  createTripoFrontBackTask: vi.fn(),
   createTripoFrontTask: vi.fn(),
   getTripoTask: vi.fn(),
 }))
@@ -93,8 +95,9 @@ describe('App', () => {
   it('keeps Create 3D Model disabled until turnaround exists', () => {
     render(<App />)
 
-    expect(screen.getByRole('button', { name: 'Create 3D Model' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Create 3D From Front View' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '3D Multiview' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '3D FrontBack' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '3D Front' })).toBeDisabled()
   })
 
   it('shows DEV sprite controls and keeps sprite button disabled until full multiview exists', async () => {
@@ -228,7 +231,7 @@ describe('App', () => {
 
     await generatePortraitThenMultiview(user)
     await user.selectOptions(screen.getByRole('combobox', { name: 'Tripo Mode' }), 'static')
-    await user.click(screen.getByRole('button', { name: 'Create 3D Model' }))
+    await user.click(screen.getByRole('button', { name: '3D Multiview' }))
 
     await waitFor(() =>
       expect(createTripoTask).toHaveBeenCalledWith({
@@ -239,6 +242,36 @@ describe('App', () => {
           right: makeDataUrl('right'),
         },
         animationMode: 'static',
+      }),
+    )
+  })
+
+  it('supports front+back Tripo task creation', async () => {
+    generatePortrait.mockResolvedValue({
+      imageDataUrl: makeDataUrl('portrait'),
+      promptUsed: 'pilot',
+      inputMode: 'prompt',
+      normalizedReferenceImageDataUrl: null,
+    })
+    generateMultiview.mockResolvedValue(makeFullMultiviewResult())
+    createTripoFrontBackTask.mockResolvedValue({
+      taskId: 'task-front-back-1',
+      status: 'queued',
+    })
+
+    render(<App />)
+    const user = userEvent.setup()
+
+    await generatePortraitThenMultiview(user)
+    await user.click(screen.getByRole('button', { name: '3D FrontBack' }))
+
+    await waitFor(() =>
+      expect(createTripoFrontBackTask).toHaveBeenCalledWith({
+        views: {
+          front: makeDataUrl('front'),
+          back: makeDataUrl('back'),
+        },
+        animationMode: 'animated',
       }),
     )
   })
@@ -286,7 +319,8 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Generate only front view' }))
     await waitFor(() => expect(generateMultiview).toHaveBeenCalledTimes(1))
 
-    expect(screen.getByRole('button', { name: 'Create 3D Model' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Create 3D From Front View' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '3D Multiview' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '3D FrontBack' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '3D Front' })).toBeEnabled()
   })
 })

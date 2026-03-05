@@ -344,6 +344,36 @@
   margin: 0;
 }
 
+.dev-viewpack-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dev-viewpack-item {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 124, 87, 0.16);
+  background: rgba(10, 10, 14, 0.76);
+}
+
+.dev-viewpack-item img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  object-fit: cover;
+  background: #d7dbd6;
+}
+
+.dev-viewpack-item p {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: rgba(226, 232, 240, 0.88);
+}
+
 .workspace-viewer__viewport {
   flex: 1 1 auto;
   min-height: 0;

@@ -89,10 +89,26 @@ export const createTripoFrontTask = async (payload) =>
     body: JSON.stringify(payload),
   })
 
-export const getTripoTask = async (taskId) =>
-  requestJson(`/api/tripo/tasks/${taskId}`, {
+export const createTripoFrontBackTask = async (payload) =>
+  requestJson('/api/tripo/tasks/front-back', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+export const getTripoTask = async (taskId, animationMode = '') => {
+  const normalizedAnimationMode = String(animationMode || '').trim().toLowerCase()
+  const query =
+    normalizedAnimationMode === 'animated' || normalizedAnimationMode === 'static'
+      ? `?animationMode=${encodeURIComponent(normalizedAnimationMode)}`
+      : ''
+
+  return requestJson(`/api/tripo/tasks/${taskId}${query}`, {
     method: 'GET',
   })
+}
 
 export const generateSpriteRun = async (payload) =>
   requestJson('/api/sprites/run', {
