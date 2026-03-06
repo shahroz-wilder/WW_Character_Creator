@@ -13,6 +13,7 @@ import { createHealthRouter } from './routes/health.js'
 import { createCharacterRouter } from './routes/character.js'
 import { createTripoRouter } from './routes/tripo.js'
 import { createSpriteRouter } from './routes/sprite.js'
+import { createDevRouter } from './routes/dev.js'
 
 export const createApp = (config = loadEnv(), services = {}) => {
   const geminiClient =
@@ -71,6 +72,7 @@ export const createApp = (config = loadEnv(), services = {}) => {
   app.use('/api/character', createCharacterRouter({ portraitService, multiviewService }))
   app.use('/api/tripo', createTripoRouter({ tripoService }))
   app.use('/api/sprites', createSpriteRouter({ spriteService }))
+  app.use('/api/dev', createDevRouter({ requestServerRestart: services.requestServerRestart }))
 
   app.use((error, _req, res, _next) => {
     console.error(error)

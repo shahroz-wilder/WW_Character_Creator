@@ -10,6 +10,7 @@ import {
   generatePortrait,
   generateSpriteRun,
   getTripoTask,
+  restartDevServer,
 } from '../api/characterApi'
 
 vi.mock('../api/characterApi', () => ({
@@ -20,6 +21,7 @@ vi.mock('../api/characterApi', () => ({
   createTripoFrontBackTask: vi.fn(),
   createTripoFrontTask: vi.fn(),
   getTripoTask: vi.fn(),
+  restartDevServer: vi.fn(),
 }))
 
 vi.mock('../components/ModelViewer', () => ({
@@ -271,9 +273,60 @@ describe('App', () => {
           front: makeDataUrl('front'),
           back: makeDataUrl('back'),
         },
-        animationMode: 'animated',
+        animationMode: 'static',
       }),
     )
+  })
+
+  it('switches between animated and A-pose model variants after Tripo completes', async () => {
+    generatePortrait.mockResolvedValue({
+      imageDataUrl: makeDataUrl('portrait'),
+      promptUsed: 'pilot',
+      inputMode: 'prompt',
+      normalizedReferenceImageDataUrl: null,
+    })
+    generateMultiview.mockResolvedValue(makeFullMultiviewResult())
+    createTripoTask.mockResolvedValue({
+      taskId: 'task-variant-1',
+      status: 'queued',
+    })
+    getTripoTask.mockResolvedValue({
+      taskId: 'task-variant-1',
+      status: 'success',
+      progress: 100,
+      error: '',
+      outputs: {
+        modelUrl: '/api/tripo/tasks/task-variant-1/model?variant=animation_model',
+        downloadUrl: '/api/tripo/tasks/task-variant-1/model?variant=animation_model',
+        variant: 'animation_model',
+        variants: {
+          animation_model: '/api/tripo/tasks/task-variant-1/model?variant=animation_model',
+          rigged_model: '/api/tripo/tasks/task-variant-1/model?variant=rigged_model',
+        },
+      },
+    })
+
+    render(<App />)
+    const user = userEvent.setup()
+
+    await generatePortraitThenMultiview(user)
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Tripo Mode' }), 'animated')
+    await user.click(screen.getByRole('button', { name: '3D Multiview' }))
+    await user.click(screen.getByRole('button', { name: 'Force Pull Result' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-stub')).toHaveTextContent(
+        '/api/tripo/tasks/task-variant-1/model?variant=animation_model',
+      )
+    })
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Preview Pose' }), 'apose')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-stub')).toHaveTextContent(
+        '/api/tripo/tasks/task-variant-1/model?variant=rigged_model',
+      )
+    })
   })
 
   it('still supports front-only Tripo task creation', async () => {

@@ -7,6 +7,7 @@ import {
   generatePortrait,
   generateSpriteRun,
   getTripoTask,
+  restartDevServer,
 } from './api/characterApi'
 import { DEFAULT_MULTIVIEW_PROMPT } from './constants/prompts'
 import { CharacterPromptForm } from './components/CharacterPromptForm'
@@ -52,7 +53,7 @@ const DEV_PRESETS = {
     'Character identity portrait front with torso and head in frame centered framing, Grey seamless background, no cape, no weapon',
   multiviewPreset: DEFAULT_MULTIVIEW_PROMPT,
   spriteSize: 64,
-  tripoAnimationMode: 'animated',
+  tripoAnimationMode: 'static',
 }
 
 const MULTIVIEW_ORDER = ['front', 'back', 'left', 'right']
@@ -92,6 +93,36 @@ const formatModelLabel = (value) => {
   const trimmed = String(value || '').trim()
   return trimmed || 'Not generated yet.'
 }
+
+const MODEL_OUTPUT_VARIANT_ORDER = [
+  'animation_model',
+  'animated_model',
+  'rigged_model',
+  'pbr_model',
+  'model',
+  'base_model',
+]
+
+const ANIMATED_MODEL_VARIANT_PRIORITY = ['animation_model', 'animated_model']
+const APOSE_MODEL_VARIANT_PRIORITY = ['rigged_model', 'model', 'pbr_model', 'base_model']
+
+const MODEL_OUTPUT_VARIANT_LABELS = {
+  animation_model: 'Animated',
+  animated_model: 'Animated',
+  rigged_model: 'A-pose',
+  pbr_model: 'PBR Model',
+  model: 'Model',
+  base_model: 'Base Model',
+}
+
+const formatModelOutputVariantLabel = (variant) =>
+  MODEL_OUTPUT_VARIANT_LABELS[variant] ||
+  String(variant || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase())
+
+const findFirstAvailableVariant = (variants, priority) =>
+  priority.find((variant) => Boolean(variants?.[variant])) || ''
 
 const normalizeAnimationMode = (value) => {
   const normalizedValue = String(value || '').trim().toLowerCase()
@@ -133,13 +164,41 @@ function App() {
   const [isCreatingFrontModel, setIsCreatingFrontModel] = useState(false)
   const [isGeneratingSprite, setIsGeneratingSprite] = useState(false)
   const [isRefreshingTripoJob, setIsRefreshingTripoJob] = useState(false)
+  const [isRestartingServer, setIsRestartingServer] = useState(false)
   const [hasHydratedPersistedSession, setHasHydratedPersistedSession] = useState(false)
   const [viewerResetSignal, setViewerResetSignal] = useState(0)
   const [isDevPanelOpen, setIsDevPanelOpen] = useState(false)
   const [modelViewPack, setModelViewPack] = useState(null)
   const [isCapturingModelViews, setIsCapturingModelViews] = useState(false)
+  const [modelPreviewMode, setModelPreviewMode] = useState('animated')
   const viewerCaptureApiRef = useRef(null)
+  const modelOutputVariants = tripoJob.outputs?.variants || null
   const hasModelViewPack = MODEL_VIEW_CAPTURE_ORDER.some((view) => Boolean(modelViewPack?.[view.key]?.dataUrl))
+  const availableModelVariants = MODEL_OUTPUT_VARIANT_ORDER.filter((variant) =>
+    Boolean(modelOutputVariants?.[variant]),
+  )
+  const animatedModelVariant = findFirstAvailableVariant(
+    modelOutputVariants,
+    ANIMATED_MODEL_VARIANT_PRIORITY,
+  )
+  const aposeModelVariant = findFirstAvailableVariant(modelOutputVariants, APOSE_MODEL_VARIANT_PRIORITY)
+  const requestedModelVariant = modelPreviewMode === 'apose' ? aposeModelVariant : animatedModelVariant
+  const fallbackModelVariant = modelPreviewMode === 'apose' ? animatedModelVariant : aposeModelVariant
+  const resolvedModelVariant =
+    requestedModelVariant ||
+    fallbackModelVariant ||
+    (tripoJob.outputs?.variant && availableModelVariants.includes(tripoJob.outputs.variant)
+      ? tripoJob.outputs.variant
+      : availableModelVariants[0] || '')
+  const isPreviewModeUnavailable = Boolean(tripoJob.taskId && !requestedModelVariant)
+  const activeModelUrl =
+    (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
+    tripoJob.outputs?.modelUrl ||
+    ''
+  const activeDownloadUrl =
+    (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
+    tripoJob.outputs?.downloadUrl ||
+    ''
 
   const currentPipelineState = error
     ? 'Attention needed'
@@ -271,7 +330,16 @@ function App() {
 
   useEffect(() => {
     setModelViewPack(null)
-  }, [tripoJob.outputs?.modelUrl])
+  }, [activeModelUrl])
+
+  useEffect(() => {
+    if (!tripoJob.taskId) {
+      setModelPreviewMode('animated')
+      return
+    }
+
+    setModelPreviewMode(tripoJob.animationMode === 'static' ? 'apose' : 'animated')
+  }, [tripoJob.taskId])
 
   const handleViewerCaptureApiReady = useCallback((captureApi) => {
     viewerCaptureApiRef.current = captureApi || null
@@ -471,6 +539,7 @@ function App() {
         },
         animationMode: devSettings.tripoAnimationMode,
       })
+      setModelPreviewMode(devSettings.tripoAnimationMode === 'static' ? 'apose' : 'animated')
 
       setTripoJob({
         taskId: result.taskId,
@@ -512,6 +581,7 @@ function App() {
         imageDataUrl: frontImageDataUrl,
         animationMode: devSettings.tripoAnimationMode,
       })
+      setModelPreviewMode(devSettings.tripoAnimationMode === 'static' ? 'apose' : 'animated')
 
       setTripoJob({
         taskId: result.taskId,
@@ -549,6 +619,7 @@ function App() {
     setError('')
     setTurnaroundGenerationMode('')
     setModelViewPack(null)
+    setModelPreviewMode('animated')
     clearPersistedSession()
   }
 
@@ -572,6 +643,7 @@ function App() {
         },
         animationMode: devSettings.tripoAnimationMode,
       })
+      setModelPreviewMode(devSettings.tripoAnimationMode === 'static' ? 'apose' : 'animated')
 
       setTripoJob({
         taskId: result.taskId,
@@ -598,11 +670,11 @@ function App() {
   }
 
   const handleDownloadModel = async () => {
-    if (!tripoJob.outputs?.downloadUrl) {
+    if (!activeDownloadUrl) {
       return
     }
 
-    await downloadFromUrl(tripoJob.outputs.downloadUrl, `${tripoJob.taskId || 'ww-character'}.glb`)
+    await downloadFromUrl(activeDownloadUrl, `${tripoJob.taskId || 'ww-character'}.glb`)
   }
 
   const handleForcePullResult = async () => {
@@ -628,6 +700,30 @@ function App() {
 
   const handleResetView = () => {
     setViewerResetSignal((signal) => signal + 1)
+  }
+
+  const handleRestartServer = async () => {
+    if (isRestartingServer) {
+      return
+    }
+
+    setError('')
+    setIsRestartingServer(true)
+
+    try {
+      await restartDevServer()
+    } catch (requestError) {
+      const message = String(requestError?.message || '')
+      const canIgnoreRestartDrop = /network request failed|failed to fetch/i.test(message)
+
+      if (!canIgnoreRestartDrop) {
+        setError(requestError.message)
+      }
+    } finally {
+      window.setTimeout(() => {
+        setIsRestartingServer(false)
+      }, 1200)
+    }
   }
 
   const handleDownloadMultiview = async () => {
@@ -758,7 +854,7 @@ function App() {
             </div>
 
             <div className="workspace-viewer__viewport">
-              {tripoJob.outputs?.modelUrl ? (
+              {activeModelUrl ? (
                 <Suspense
                   fallback={
                     <div className="viewer-placeholder">
@@ -767,7 +863,7 @@ function App() {
                   }
                 >
                   <ModelViewer
-                    modelUrl={tripoJob.outputs.modelUrl}
+                    modelUrl={activeModelUrl}
                     resetSignal={viewerResetSignal}
                     onCaptureApiReady={handleViewerCaptureApiReady}
                   />
@@ -800,7 +896,7 @@ function App() {
               onForcePullResult={handleForcePullResult}
               onDownloadModel={handleDownloadModel}
               onResetView={handleResetView}
-              hasViewer={Boolean(tripoJob.outputs?.modelUrl)}
+              hasViewer={Boolean(activeModelUrl)}
             />
           </section>
 
@@ -964,8 +1060,20 @@ function App() {
               <span>Tripo</span>
               <div className="dev-panel__status">
                 <strong>Task Controls</strong>
-                <p>{tripoJob.outputs?.modelUrl ? 'Preview ready' : 'Preview unavailable'}</p>
+                <p>{activeModelUrl ? 'Preview ready' : 'Preview unavailable'}</p>
                 <p>Output mode: {devSettings.tripoAnimationMode === 'animated' ? 'Animated' : 'Static'}</p>
+                <p>Preview pose: {modelPreviewMode === 'apose' ? 'A-pose' : 'Animated'}</p>
+                <p>
+                  Preview variant:{' '}
+                  {resolvedModelVariant
+                    ? formatModelOutputVariantLabel(resolvedModelVariant)
+                    : 'Unavailable'}
+                </p>
+                <p>Animated file: {animatedModelVariant ? 'available' : 'unavailable'}</p>
+                <p>A-pose file: {aposeModelVariant ? 'available' : 'unavailable'}</p>
+                {isPreviewModeUnavailable ? (
+                  <p>Requested pose is unavailable for this task. Showing fallback preview.</p>
+                ) : null}
                 <p>Status: {tripoJob.status}</p>
                 <p>
                   {tripoJob.taskId
@@ -974,6 +1082,16 @@ function App() {
                 </p>
                 {tripoJob.error ? <p className="error-copy">{tripoJob.error}</p> : null}
               </div>
+              <label className="dev-panel__field">
+                <span>Preview Pose</span>
+                <select
+                  value={modelPreviewMode}
+                  onChange={(event) => setModelPreviewMode(event.target.value)}
+                >
+                  <option value="animated">Animated</option>
+                  <option value="apose">A-pose</option>
+                </select>
+              </label>
               <div className="action-row action-row--compact action-row--dev">
                 <button
                   type="button"
@@ -986,7 +1104,7 @@ function App() {
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={!tripoJob.outputs?.downloadUrl}
+                  disabled={!activeDownloadUrl}
                   onClick={handleDownloadModel}
                 >
                   Download GLB
@@ -994,10 +1112,18 @@ function App() {
                 <button
                   type="button"
                   className="ghost-button"
-                  disabled={!tripoJob.outputs?.modelUrl}
+                  disabled={!activeModelUrl}
                   onClick={handleResetView}
                 >
                   Reset View
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={isRestartingServer}
+                  onClick={handleRestartServer}
+                >
+                  {isRestartingServer ? 'Restarting Server...' : 'Restart Server'}
                 </button>
               </div>
             </div>
@@ -1008,7 +1134,7 @@ function App() {
                   type="button"
                   className="primary-button"
                   onClick={handleCaptureModelViews}
-                  disabled={!tripoJob.outputs?.modelUrl || isCapturingModelViews}
+                  disabled={!activeModelUrl || isCapturingModelViews}
                 >
                   {isCapturingModelViews ? 'Capturing 8 views...' : 'Capture 8 Views'}
                 </button>

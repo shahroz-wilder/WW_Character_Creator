@@ -97,8 +97,8 @@ export const createTripoClient = ({ apiKey, baseUrl }) => {
       originalModelTaskId,
       outFormat = 'glb',
       rigType = 'biped',
-      spec = 'mixamo',
-      modelVersion = 'v2.0-20250506',
+      spec = 'tripo',
+      modelVersion = 'v1.0-20240301',
     }) {
       const payload = await request('/task', {
         method: 'POST',
@@ -126,17 +126,24 @@ export const createTripoClient = ({ apiKey, baseUrl }) => {
       originalModelTaskId,
       animation = 'idle',
       taskType = 'animate_model',
+      animateInPlace = null,
     }) {
+      const requestBody = {
+        type: taskType,
+        original_model_task_id: originalModelTaskId,
+        animation,
+      }
+
+      if (taskType === 'animate_retarget' && animateInPlace !== null) {
+        requestBody.animate_in_place = Boolean(animateInPlace)
+      }
+
       const payload = await request('/task', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          type: taskType,
-          original_model_task_id: originalModelTaskId,
-          animation,
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       const taskId = payload?.data?.task_id

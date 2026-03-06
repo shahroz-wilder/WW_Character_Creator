@@ -34,6 +34,7 @@ const TEST_CONFIG = {
   tripoIdleAnimationEnabled: false,
   tripoIdleAnimationTaskType: 'animate_model',
   tripoIdleAnimationName: 'idle',
+  tripoIdleAnimationInPlace: true,
   pixellabApiKey: 'pxl_test',
   pixellabBaseUrl: 'https://api.pixellab.ai/v1',
 }
@@ -57,6 +58,34 @@ const noopSpriteService = {
 describe('loadEnv', () => {
   it('rejects missing API keys', () => {
     expect(() => loadEnv({})).toThrow(/GEMINI_API_KEY, TRIPO_API_KEY, PIXELLAB_API_KEY/)
+  })
+})
+
+describe('dev route', () => {
+  it('accepts restart requests and triggers the restart callback', async () => {
+    vi.useFakeTimers()
+
+    try {
+      const requestServerRestart = vi.fn().mockResolvedValue(undefined)
+      const app = createApp(TEST_CONFIG, {
+        portraitService: { generatePortrait: vi.fn() },
+        multiviewService: noopMultiviewService,
+        tripoService: noopTripoService,
+        spriteService: noopSpriteService,
+        requestServerRestart,
+      })
+
+      const response = await request(app)
+        .post('/api/dev/restart-server')
+        .send({})
+
+      expect(response.status).toBe(202)
+      expect(response.body.status).toBe('restarting')
+      await vi.runAllTimersAsync()
+      expect(requestServerRestart).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -433,7 +462,7 @@ describe('sprite route', () => {
 })
 
 describe('tripoService', () => {
-  it('uploads turnaround views in front-back-left-right order', async () => {
+  it('uploads turnaround views in front-left-back-right order', async () => {
     const makeDataUrl = async (color) => {
       const buffer = await sharp({
         create: {
@@ -452,8 +481,8 @@ describe('tripoService', () => {
     const uploadImageBuffer = vi
       .fn()
       .mockResolvedValueOnce({ file_token: 'front-token', type: 'jpg' })
-      .mockResolvedValueOnce({ file_token: 'back-token', type: 'jpg' })
       .mockResolvedValueOnce({ file_token: 'left-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'back-token', type: 'jpg' })
       .mockResolvedValueOnce({ file_token: 'right-token', type: 'jpg' })
     const createMultiviewTask = vi.fn().mockResolvedValue('task-123')
     const tripoService = createTripoService({
@@ -479,15 +508,15 @@ describe('tripoService', () => {
       expect.objectContaining({
         files: [
           { file_token: 'front-token', type: 'jpg' },
-          { file_token: 'back-token', type: 'jpg' },
           { file_token: 'left-token', type: 'jpg' },
+          { file_token: 'back-token', type: 'jpg' },
           { file_token: 'right-token', type: 'jpg' },
         ],
       }),
     )
   })
 
-  it('uploads front+back views in front-back order', async () => {
+  it('uploads front+back views into front/back multiview slots', async () => {
     const makeDataUrl = async (color) => {
       const buffer = await sharp({
         create: {
@@ -529,66 +558,14 @@ describe('tripoService', () => {
       expect.objectContaining({
         files: [
           { file_token: 'front-token', type: 'jpg' },
+          {},
           { file_token: 'back-token', type: 'jpg' },
+          {},
         ],
       }),
     )
     expect(result).toEqual({
       taskId: 'task-front-back-123',
-      status: 'queued',
-    })
-  })
-
-  it('falls back to four slots with empty left/right placeholders when Tripo rejects two-image front+back payload', async () => {
-    const makeDataUrl = async (color) => {
-      const buffer = await sharp({
-        create: {
-          width: 1,
-          height: 1,
-          channels: 3,
-          background: color,
-        },
-      })
-        .png()
-        .toBuffer()
-
-      return `data:image/png;base64,${buffer.toString('base64')}`
-    }
-
-    const frontUpload = { file_token: 'front-token', type: 'jpg' }
-    const backUpload = { file_token: 'back-token', type: 'jpg' }
-    const uploadImageBuffer = vi.fn().mockResolvedValueOnce(frontUpload).mockResolvedValueOnce(backUpload)
-    const createMultiviewTask = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('Tripo request failed: One or more of your parameter is invalid'))
-      .mockResolvedValueOnce('task-front-back-fallback-1')
-
-    const tripoService = createTripoService({
-      tripoClient: {
-        uploadImageBuffer,
-        createMultiviewTask,
-        createImageTask: vi.fn(),
-        getTask: vi.fn(),
-        fetchRemoteAsset: vi.fn(),
-      },
-      config: TEST_CONFIG,
-    })
-
-    const result = await tripoService.createTaskFromFrontBackViews({
-      front: await makeDataUrl({ r: 255, g: 0, b: 0 }),
-      back: await makeDataUrl({ r: 0, g: 255, b: 0 }),
-    })
-
-    expect(createMultiviewTask).toHaveBeenCalledTimes(2)
-    expect(createMultiviewTask.mock.calls[0][0].files).toEqual([frontUpload, backUpload])
-    expect(createMultiviewTask.mock.calls[1][0].files).toEqual([
-      frontUpload,
-      backUpload,
-      {},
-      {},
-    ])
-    expect(result).toEqual({
-      taskId: 'task-front-back-fallback-1',
       status: 'queued',
     })
   })
@@ -657,10 +634,18 @@ describe('tripoService', () => {
 
     const result = await tripoService.getTaskSummary('task-987')
 
-    expect(result.outputs).toEqual({
-      modelUrl: '/api/tripo/tasks/task-987/model?variant=model',
-      downloadUrl: '/api/tripo/tasks/task-987/model?variant=model',
-    })
+    expect(result.outputs).toEqual(
+      expect.objectContaining({
+        modelUrl: '/api/tripo/tasks/task-987/model?variant=model',
+        downloadUrl: '/api/tripo/tasks/task-987/model?variant=model',
+        variant: 'model',
+      }),
+    )
+    expect(result.outputs.variants).toEqual(
+      expect.objectContaining({
+        model: '/api/tripo/tasks/task-987/model?variant=model',
+      }),
+    )
   })
 
   it('starts a Mixamo rig task when base model succeeds and rigging is enabled', async () => {
@@ -749,10 +734,13 @@ describe('tripoService', () => {
 
     const summary = await tripoService.getTaskSummary('task-base-999')
 
-    expect(summary.outputs).toEqual({
-      modelUrl: '/api/tripo/tasks/rig-task-999/model?variant=model',
-      downloadUrl: '/api/tripo/tasks/rig-task-999/model?variant=model',
-    })
+    expect(summary.outputs).toEqual(
+      expect.objectContaining({
+        modelUrl: '/api/tripo/tasks/rig-task-999/model?variant=model',
+        downloadUrl: '/api/tripo/tasks/rig-task-999/model?variant=model',
+        variant: 'model',
+      }),
+    )
   })
 
   it('starts idle animation task after rig success when enabled', async () => {
@@ -793,6 +781,24 @@ describe('tripoService', () => {
             output: {
               animated_model: 'https://example.com/animated-idle.glb',
             },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'rig-task-idle-1',
+            type: 'animate_rig',
+            status: 'success',
+            progress: 100,
+            output: {
+              rigged_model: 'https://example.com/rigged.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'task-base-idle-1',
+            type: 'multiview_to_model',
+            status: 'success',
+            progress: 100,
+            output: {
+              model: 'https://example.com/base.glb',
+            },
           }),
         fetchRemoteAsset: vi.fn(),
       },
@@ -810,12 +816,22 @@ describe('tripoService', () => {
       originalModelTaskId: 'rig-task-idle-1',
       animation: 'idle',
       taskType: 'animate_model',
+      animateInPlace: true,
     })
     expect(summary.taskId).toBe('anim-task-777')
-    expect(summary.outputs).toEqual({
-      modelUrl: '/api/tripo/tasks/anim-task-777/model?variant=animated_model',
-      downloadUrl: '/api/tripo/tasks/anim-task-777/model?variant=animated_model',
-    })
+    expect(summary.outputs).toEqual(
+      expect.objectContaining({
+        modelUrl: '/api/tripo/tasks/anim-task-777/model?variant=animated_model',
+        downloadUrl: '/api/tripo/tasks/anim-task-777/model?variant=animated_model',
+        variant: 'animated_model',
+      }),
+    )
+    expect(summary.outputs.variants).toEqual(
+      expect.objectContaining({
+        animated_model: '/api/tripo/tasks/anim-task-777/model?variant=animated_model',
+        rigged_model: '/api/tripo/tasks/anim-task-777/model?variant=rigged_model',
+      }),
+    )
   })
 
   it('skips rig and animation tasks when static mode is requested', async () => {
@@ -880,10 +896,13 @@ describe('tripoService', () => {
     expect(createRigTask).not.toHaveBeenCalled()
     expect(createAnimationTask).not.toHaveBeenCalled()
     expect(summary.taskId).toBe('task-base-static-1')
-    expect(summary.outputs).toEqual({
-      modelUrl: '/api/tripo/tasks/task-base-static-1/model?variant=model',
-      downloadUrl: '/api/tripo/tasks/task-base-static-1/model?variant=model',
-    })
+    expect(summary.outputs).toEqual(
+      expect.objectContaining({
+        modelUrl: '/api/tripo/tasks/task-base-static-1/model?variant=model',
+        downloadUrl: '/api/tripo/tasks/task-base-static-1/model?variant=model',
+        variant: 'model',
+      }),
+    )
   })
 
   it('honors static mode override for untracked tasks during polling', async () => {
@@ -921,11 +940,14 @@ describe('tripoService', () => {
     expect(createRigTask).not.toHaveBeenCalled()
     expect(createAnimationTask).not.toHaveBeenCalled()
     expect(summary.taskId).toBe('task-base-overridden-static-1')
-    expect(summary.outputs).toEqual({
-      modelUrl: '/api/tripo/tasks/task-base-overridden-static-1/model?variant=model&animationMode=static',
-      downloadUrl:
-        '/api/tripo/tasks/task-base-overridden-static-1/model?variant=model&animationMode=static',
-    })
+    expect(summary.outputs).toEqual(
+      expect.objectContaining({
+        modelUrl: '/api/tripo/tasks/task-base-overridden-static-1/model?variant=model&animationMode=static',
+        downloadUrl:
+          '/api/tripo/tasks/task-base-overridden-static-1/model?variant=model&animationMode=static',
+        variant: 'model',
+      }),
+    )
   })
 
   it('forces idle animation task when animated mode is requested', async () => {
@@ -979,6 +1001,24 @@ describe('tripoService', () => {
             output: {
               animation_model: 'https://example.com/animated-idle.glb',
             },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'rig-task-animated-1',
+            type: 'animate_rig',
+            status: 'success',
+            progress: 100,
+            output: {
+              rigged_model: 'https://example.com/rigged-animated.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'task-base-animated-1',
+            type: 'image_to_model',
+            status: 'success',
+            progress: 100,
+            output: {
+              model: 'https://example.com/base-animated.glb',
+            },
           }),
         fetchRemoteAsset: vi.fn(),
       },
@@ -1001,12 +1041,22 @@ describe('tripoService', () => {
       originalModelTaskId: 'rig-task-animated-1',
       animation: 'idle',
       taskType: 'animate_model',
+      animateInPlace: true,
     })
     expect(summary.taskId).toBe('anim-task-animated-1')
-    expect(summary.outputs).toEqual({
-      modelUrl: '/api/tripo/tasks/anim-task-animated-1/model?variant=animation_model',
-      downloadUrl: '/api/tripo/tasks/anim-task-animated-1/model?variant=animation_model',
-    })
+    expect(summary.outputs).toEqual(
+      expect.objectContaining({
+        modelUrl: '/api/tripo/tasks/anim-task-animated-1/model?variant=animation_model',
+        downloadUrl: '/api/tripo/tasks/anim-task-animated-1/model?variant=animation_model',
+        variant: 'animation_model',
+      }),
+    )
+    expect(summary.outputs.variants).toEqual(
+      expect.objectContaining({
+        animation_model: '/api/tripo/tasks/anim-task-animated-1/model?variant=animation_model',
+        rigged_model: '/api/tripo/tasks/anim-task-animated-1/model?variant=rigged_model',
+      }),
+    )
   })
 })
 

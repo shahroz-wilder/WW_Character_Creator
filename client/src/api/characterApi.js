@@ -110,6 +110,11 @@ export const getTripoTask = async (taskId, animationMode = '') => {
   })
 }
 
+export const restartDevServer = async () =>
+  requestJson('/api/dev/restart-server', {
+    method: 'POST',
+  })
+
 export const generateSpriteRun = async (payload) =>
   requestJson('/api/sprites/run', {
     method: 'POST',
