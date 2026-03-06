@@ -8,13 +8,13 @@ import { retargetClip } from 'three/examples/jsm/utils/SkeletonUtils.js'
 
 const VIEW_CAPTURE_PRESETS = [
   { key: 'front', label: 'Front', yawDeg: 0 },
+  { key: 'front_right', label: 'Front_Right', yawDeg: -45 },
+  { key: 'right', label: 'Right', yawDeg: -90 },
+  { key: 'back_right', label: 'Back_Right', yawDeg: -135 },
   { key: 'back', label: 'Back', yawDeg: 180 },
-  { key: 'sideLeft', label: 'SideLeft', yawDeg: 90 },
-  { key: 'sideRight', label: 'SideRight', yawDeg: -90 },
-  { key: 'frontRight', label: 'FrontRight', yawDeg: -45 },
-  { key: 'frontLeft', label: 'FrontLeft', yawDeg: 45 },
-  { key: 'backtRight', label: 'BacktRight', yawDeg: -135 },
-  { key: 'backtLeft', label: 'BacktLeft', yawDeg: 135 },
+  { key: 'back_left', label: 'Back_Left', yawDeg: 135 },
+  { key: 'left', label: 'Left', yawDeg: 90 },
+  { key: 'front_left', label: 'Front_Left', yawDeg: 45 },
 ]
 
 const fitCameraToObject = (camera, controls, object) => {
@@ -111,6 +111,30 @@ const chooseIdleLikeClip = (clips = []) => {
   return idleLikeClip || clips[0]
 }
 
+const MARGIN_RATIO = 0.1
+
+const getCaptureFraming = (camera, object) => {
+  const box = new THREE.Box3().setFromObject(object)
+  const size = box.getSize(new THREE.Vector3())
+  const center = box.getCenter(new THREE.Vector3())
+  const fitRatio = Math.max(1 - MARGIN_RATIO * 2, 0.2)
+  const safeWidth = Math.max(size.x, 0.001)
+  const safeHeight = Math.max(size.y, 0.001)
+  const verticalFovRad = THREE.MathUtils.degToRad(camera.fov)
+  const horizontalFovRad =
+    2 * Math.atan(Math.tan(verticalFovRad / 2) * Math.max(camera.aspect, 0.001))
+
+  const distanceForHeight = (safeHeight / fitRatio) / (2 * Math.tan(verticalFovRad / 2))
+  const distanceForWidth = (safeWidth / fitRatio) / (2 * Math.tan(horizontalFovRad / 2))
+  const horizontalDistance = Math.max(distanceForHeight, distanceForWidth, 1.5)
+
+  return {
+    center,
+    horizontalDistance,
+    verticalOffset: 0,
+  }
+}
+
 export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = null }) {
   const containerRef = useRef(null)
   const controlsRef = useRef(null)
@@ -188,17 +212,13 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
       const originalTarget = controls.target.clone()
       const originalPosition = camera.position.clone()
       const originalQuaternion = camera.quaternion.clone()
-      const offset = originalPosition.clone().sub(originalTarget)
-      const baseHorizontal = new THREE.Vector3(offset.x, 0, offset.z)
-
-      const horizontalDistance =
-        baseHorizontal.length() > 0.0001 ? baseHorizontal.length() : Math.max(offset.length(), 2)
-      const verticalOffset = offset.y
-      if (baseHorizontal.lengthSq() < 0.0000001) {
-        baseHorizontal.set(0, 0, 1)
-      } else {
-        baseHorizontal.normalize()
-      }
+      const { center: captureTarget, horizontalDistance, verticalOffset } = getCaptureFraming(
+        camera,
+        loadedScene,
+      )
+      // The generated Tripo character forward axis aligns with +X in this viewer.
+      // Use +X as canonical front so capture labels map to actual views.
+      const baseHorizontal = new THREE.Vector3(1, 0, 0)
 
       const screenshots = {}
       const originalBackground = scene.background
@@ -213,10 +233,10 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
             .applyAxisAngle(worldUp, THREE.MathUtils.degToRad(preset.yawDeg))
             .normalize()
 
-          camera.position.copy(originalTarget).addScaledVector(direction, horizontalDistance)
-          camera.position.y = originalTarget.y + verticalOffset
-          camera.lookAt(originalTarget)
-          controls.target.copy(originalTarget)
+          camera.position.copy(captureTarget).addScaledVector(direction, horizontalDistance)
+          camera.position.y = captureTarget.y + verticalOffset
+          camera.lookAt(captureTarget)
+          controls.target.copy(captureTarget)
           controls.update()
           renderer.render(scene, camera)
 

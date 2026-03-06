@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import JSZip from 'jszip'
 import {
   createTripoFrontBackTask,
   createTripoFrontTask,
@@ -17,7 +18,7 @@ import { MultiviewPromptEditor } from './components/MultiviewPromptEditor'
 import { PortraitReviewCard } from './components/PortraitReviewCard'
 import { SpriteGrid } from './components/SpriteGrid'
 import { TripoJobPanel } from './components/TripoJobPanel'
-import { downloadDataUrl, downloadFromUrl } from './lib/download'
+import { downloadBlob, downloadDataUrl, downloadFromUrl } from './lib/download'
 import { createHistoryEntry, createRunId, updateHistoryEntry } from './lib/historyStore'
 import {
   clearPersistedSession,
@@ -59,14 +60,23 @@ const DEV_PRESETS = {
 const MULTIVIEW_ORDER = ['front', 'back', 'left', 'right']
 const MODEL_VIEW_CAPTURE_ORDER = [
   { key: 'front', label: 'Front' },
+  { key: 'front_right', label: 'Front_Right' },
+  { key: 'right', label: 'Right' },
+  { key: 'back_right', label: 'Back_Right' },
   { key: 'back', label: 'Back' },
-  { key: 'sideLeft', label: 'SideLeft' },
-  { key: 'sideRight', label: 'SideRight' },
-  { key: 'frontRight', label: 'FrontRight' },
-  { key: 'frontLeft', label: 'FrontLeft' },
-  { key: 'backtRight', label: 'BacktRight' },
-  { key: 'backtLeft', label: 'BacktLeft' },
+  { key: 'back_left', label: 'Back_Left' },
+  { key: 'left', label: 'Left' },
+  { key: 'front_left', label: 'Front_Left' },
 ]
+const MODEL_VIEW_CAPTURE_SIZE = 128
+const MODEL_VIEW_CROP_MARGIN_RATIO = 0.06
+const MODEL_VIEW_ALPHA_THRESHOLD = 1
+const MODEL_VIEW_PIXEL_ART_MODE = true
+const VALID_SPRITE_SIZES = new Set([64, 84, 128])
+const GIF_TRANSPARENT_HEX = 0xff00ff
+const GIF_TRANSPARENT_CSS = '#ff00ff'
+const GIF_TRANSPARENT_RGB = { r: 255, g: 0, b: 255 }
+const GIF_ALPHA_CUTOFF = 8
 
 const mimeTypeToExtension = (mimeType = 'image/png') => {
   if (mimeType.includes('jpeg') || mimeType.includes('jpg')) {
@@ -88,6 +98,125 @@ const getDataUrlFileExtension = (dataUrl) => {
   const match = String(dataUrl || '').match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/)
   return mimeTypeToExtension(match?.[1] || 'image/png')
 }
+
+const dataUrlToBase64Payload = (dataUrl) => {
+  const match = String(dataUrl || '').match(/^data:[^;]+;base64,(.+)$/)
+  return match?.[1] || ''
+}
+
+const loadImageFromDataUrl = (dataUrl) =>
+  new Promise((resolve, reject) => {
+    const image = new Image()
+
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Failed to decode screenshot image.'))
+    image.src = dataUrl
+  })
+
+const resizeDataUrlForModelView = (dataUrl, size = MODEL_VIEW_CAPTURE_SIZE) =>
+  new Promise((resolve, reject) => {
+    const image = new Image()
+
+    image.onload = () => {
+      const sourceCanvas = document.createElement('canvas')
+      sourceCanvas.width = image.naturalWidth || image.width
+      sourceCanvas.height = image.naturalHeight || image.height
+      const sourceContext = sourceCanvas.getContext('2d')
+
+      if (!sourceContext) {
+        reject(new Error('2D canvas context is unavailable for screenshot scaling.'))
+        return
+      }
+
+      sourceContext.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height)
+      sourceContext.drawImage(image, 0, 0, sourceCanvas.width, sourceCanvas.height)
+
+      const pixelData = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height).data
+
+      let minX = sourceCanvas.width
+      let minY = sourceCanvas.height
+      let maxX = -1
+      let maxY = -1
+
+      for (let y = 0; y < sourceCanvas.height; y += 1) {
+        for (let x = 0; x < sourceCanvas.width; x += 1) {
+          const pixelIndex = (y * sourceCanvas.width + x) * 4
+          const alpha = pixelData[pixelIndex + 3]
+
+          if (alpha < MODEL_VIEW_ALPHA_THRESHOLD) {
+            continue
+          }
+
+          if (x < minX) {
+            minX = x
+          }
+          if (y < minY) {
+            minY = y
+          }
+          if (x > maxX) {
+            maxX = x
+          }
+          if (y > maxY) {
+            maxY = y
+          }
+        }
+      }
+
+      const hasOpaquePixels = maxX >= minX && maxY >= minY
+      const cropX = hasOpaquePixels ? minX : 0
+      const cropY = hasOpaquePixels ? minY : 0
+      const cropWidth = hasOpaquePixels ? maxX - minX + 1 : sourceCanvas.width
+      const cropHeight = hasOpaquePixels ? maxY - minY + 1 : sourceCanvas.height
+      const cropMargin = Math.max(
+        Math.round(Math.max(cropWidth, cropHeight) * MODEL_VIEW_CROP_MARGIN_RATIO),
+        1,
+      )
+      const expandedX = Math.max(0, cropX - cropMargin)
+      const expandedY = Math.max(0, cropY - cropMargin)
+      const expandedRight = Math.min(sourceCanvas.width, cropX + cropWidth + cropMargin)
+      const expandedBottom = Math.min(sourceCanvas.height, cropY + cropHeight + cropMargin)
+      const expandedWidth = Math.max(1, expandedRight - expandedX)
+      const expandedHeight = Math.max(1, expandedBottom - expandedY)
+
+      const outputCanvas = document.createElement('canvas')
+      outputCanvas.width = size
+      outputCanvas.height = size
+      const outputContext = outputCanvas.getContext('2d')
+
+      if (!outputContext) {
+        reject(new Error('2D canvas context is unavailable for screenshot scaling.'))
+        return
+      }
+
+      const scale = Math.min(size / expandedWidth, size / expandedHeight)
+      const drawWidth = Math.max(1, Math.round(expandedWidth * scale))
+      const drawHeight = Math.max(1, Math.round(expandedHeight * scale))
+      const drawX = Math.round((size - drawWidth) * 0.5)
+      const drawY = Math.round((size - drawHeight) * 0.5)
+
+      outputContext.clearRect(0, 0, size, size)
+      outputContext.imageSmoothingEnabled = !MODEL_VIEW_PIXEL_ART_MODE
+      outputContext.drawImage(
+        sourceCanvas,
+        expandedX,
+        expandedY,
+        expandedWidth,
+        expandedHeight,
+        drawX,
+        drawY,
+        drawWidth,
+        drawHeight,
+      )
+
+      resolve(outputCanvas.toDataURL('image/png'))
+    }
+
+    image.onerror = () => {
+      reject(new Error('Failed to resize screenshot image.'))
+    }
+
+    image.src = dataUrl
+  })
 
 const formatModelLabel = (value) => {
   const trimmed = String(value || '').trim()
@@ -123,6 +252,11 @@ const formatModelOutputVariantLabel = (variant) =>
 
 const findFirstAvailableVariant = (variants, priority) =>
   priority.find((variant) => Boolean(variants?.[variant])) || ''
+
+const normalizeSpriteSize = (value) => {
+  const numericValue = Number(value)
+  return VALID_SPRITE_SIZES.has(numericValue) ? numericValue : DEV_PRESETS.spriteSize
+}
 
 const normalizeAnimationMode = (value) => {
   const normalizedValue = String(value || '').trim().toLowerCase()
@@ -170,6 +304,7 @@ function App() {
   const [isDevPanelOpen, setIsDevPanelOpen] = useState(false)
   const [modelViewPack, setModelViewPack] = useState(null)
   const [isCapturingModelViews, setIsCapturingModelViews] = useState(false)
+  const [isBuildingModelViewGif, setIsBuildingModelViewGif] = useState(false)
   const [modelPreviewMode, setModelPreviewMode] = useState('animated')
   const viewerCaptureApiRef = useRef(null)
   const modelOutputVariants = tripoJob.outputs?.variants || null
@@ -766,10 +901,35 @@ function App() {
 
     setError('')
     setIsCapturingModelViews(true)
+    const captureSize = normalizeSpriteSize(devSettings.spriteSize)
 
     try {
       const captures = await captureApi.captureEightViews()
-      setModelViewPack(captures)
+      const resizedEntries = await Promise.all(
+        MODEL_VIEW_CAPTURE_ORDER.map(async (view) => {
+          const screenshot = captures?.[view.key]
+          if (!screenshot?.dataUrl) {
+            return [view.key, null]
+          }
+
+          const resizedDataUrl = await resizeDataUrlForModelView(screenshot.dataUrl, captureSize)
+          return [
+            view.key,
+            {
+              ...screenshot,
+              label: view.label,
+              dataUrl: resizedDataUrl,
+              width: captureSize,
+              height: captureSize,
+            },
+          ]
+        }),
+      )
+
+      const resizedCapturePack = Object.fromEntries(
+        resizedEntries.filter((entry) => Boolean(entry[1])),
+      )
+      setModelViewPack(resizedCapturePack)
     } catch (requestError) {
       setError(requestError?.message || 'Failed to capture model view screenshots.')
     } finally {
@@ -785,6 +945,8 @@ function App() {
 
     setError('')
     const runSuffix = currentRunId || tripoJob.taskId || 'session'
+    const zip = new JSZip()
+    let filesCount = 0
 
     for (const view of MODEL_VIEW_CAPTURE_ORDER) {
       const screenshot = modelViewPack?.[view.key]
@@ -792,8 +954,103 @@ function App() {
         continue
       }
 
-      downloadDataUrl(screenshot.dataUrl, `model-view-${runSuffix}-${view.label.toLowerCase()}.png`)
-      await new Promise((resolve) => window.setTimeout(resolve, 120))
+      const base64Payload = dataUrlToBase64Payload(screenshot.dataUrl)
+      if (!base64Payload) {
+        continue
+      }
+
+      zip.file(`${view.key}.png`, base64Payload, { base64: true })
+      filesCount += 1
+    }
+
+    if (filesCount === 0) {
+      setError('No model screenshots available to add to zip.')
+      return
+    }
+
+    const zipBlob = await zip.generateAsync({
+      type: 'blob',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+    })
+    downloadBlob(zipBlob, `model-views-${runSuffix}.zip`)
+  }
+
+  const handleDownloadModelViewsGif = async () => {
+    if (!hasModelViewPack) {
+      setError('Generate model screenshots first.')
+      return
+    }
+
+    setError('')
+    setIsBuildingModelViewGif(true)
+
+    try {
+      const captureSize = normalizeSpriteSize(devSettings.spriteSize)
+      const orderedFrames = MODEL_VIEW_CAPTURE_ORDER
+        .map((view) => modelViewPack?.[view.key]?.dataUrl || '')
+        .filter(Boolean)
+
+      if (orderedFrames.length === 0) {
+        setError('No model screenshots available to create GIF.')
+        return
+      }
+
+      const [{ default: GIF }, { default: workerScript }] = await Promise.all([
+        import('gif.js'),
+        import('gif.js/dist/gif.worker.js?url'),
+      ])
+      const gif = new GIF({
+        workers: 2,
+        quality: 10,
+        width: captureSize,
+        height: captureSize,
+        background: GIF_TRANSPARENT_CSS,
+        transparent: GIF_TRANSPARENT_HEX,
+        workerScript,
+      })
+      const frameCanvas = document.createElement('canvas')
+      frameCanvas.width = captureSize
+      frameCanvas.height = captureSize
+      const frameContext = frameCanvas.getContext('2d')
+
+      if (!frameContext) {
+        throw new Error('2D canvas context is unavailable for GIF generation.')
+      }
+
+      for (const frameDataUrl of orderedFrames) {
+        const frameImage = await loadImageFromDataUrl(frameDataUrl)
+        frameContext.clearRect(0, 0, captureSize, captureSize)
+        frameContext.imageSmoothingEnabled = !MODEL_VIEW_PIXEL_ART_MODE
+        frameContext.drawImage(frameImage, 0, 0, captureSize, captureSize)
+        const frameImageData = frameContext.getImageData(0, 0, captureSize, captureSize)
+        const framePixels = frameImageData.data
+
+        for (let pixelIndex = 0; pixelIndex < framePixels.length; pixelIndex += 4) {
+          const alpha = framePixels[pixelIndex + 3]
+          if (alpha <= GIF_ALPHA_CUTOFF) {
+            framePixels[pixelIndex] = GIF_TRANSPARENT_RGB.r
+            framePixels[pixelIndex + 1] = GIF_TRANSPARENT_RGB.g
+            framePixels[pixelIndex + 2] = GIF_TRANSPARENT_RGB.b
+          }
+          framePixels[pixelIndex + 3] = 255
+        }
+
+        gif.addFrame(frameImageData, {
+          delay: 140,
+        })
+      }
+
+      const gifBlob = await new Promise((resolve) => {
+        gif.on('finished', (blob) => resolve(blob))
+        gif.render()
+      })
+      const runSuffix = currentRunId || tripoJob.taskId || 'session'
+      downloadBlob(gifBlob, `model-views-${runSuffix}.gif`)
+    } catch (requestError) {
+      setError(requestError?.message || 'Failed to generate model views GIF.')
+    } finally {
+      setIsBuildingModelViewGif(false)
     }
   }
 
@@ -987,6 +1244,7 @@ function App() {
                 }
               >
                 <option value="64">64x64</option>
+                <option value="84">84x84</option>
                 <option value="128">128x128</option>
               </select>
             </label>
@@ -1144,7 +1402,15 @@ function App() {
                   onClick={handleDownloadModelViews}
                   disabled={!hasModelViewPack}
                 >
-                  Download 8 Views
+                  Download 8 Views ZIP
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleDownloadModelViewsGif}
+                  disabled={!hasModelViewPack || isBuildingModelViewGif}
+                >
+                  {isBuildingModelViewGif ? 'Building GIF...' : 'Download GIF'}
                 </button>
               </div>
               {hasModelViewPack ? (

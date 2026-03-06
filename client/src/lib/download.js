@@ -6,14 +6,7 @@ export const downloadFromUrl = async (url, filename) => {
   }
 
   const blob = await response.blob()
-  const objectUrl = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = objectUrl
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(objectUrl)
+  downloadBlob(blob, filename)
 }
 
 export const downloadDataUrl = (dataUrl, filename) => {
@@ -23,4 +16,15 @@ export const downloadDataUrl = (dataUrl, filename) => {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
+}
+
+export const downloadBlob = (blob, filename) => {
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(objectUrl)
 }

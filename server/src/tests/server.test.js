@@ -429,6 +429,31 @@ describe('sprite route', () => {
     )
   })
 
+  it('accepts valid payload with spriteSize 84', async () => {
+    const { app, spriteService } = createSpriteApp()
+    const viewDataUrl = await makeDataUrl()
+
+    const response = await request(app)
+      .post('/api/sprites/run')
+      .send({
+        views: {
+          front: viewDataUrl,
+          back: viewDataUrl,
+          left: viewDataUrl,
+          right: viewDataUrl,
+        },
+        spriteSize: 84,
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.spriteSize).toBe(84)
+    expect(spriteService.generateRunSprites).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spriteSize: 84,
+      }),
+    )
+  })
+
   it('rejects unsupported sprite size', async () => {
     const pngDataUrl = await makeDataUrl()
     const spriteService = createSpriteService({
@@ -457,7 +482,7 @@ describe('sprite route', () => {
       })
 
     expect(response.status).toBe(400)
-    expect(response.body.error).toMatch(/Sprite size must be either 64 or 128/i)
+    expect(response.body.error).toMatch(/Sprite size must be one of: 64, 84, 128/i)
   })
 })
 
