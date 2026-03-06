@@ -29,7 +29,7 @@ const fitCameraToObject = (camera, controls, object) => {
   camera.near = 0.01
   camera.far = distance * 10
   camera.updateProjectionMatrix()
-  controls.target.set(0, size.y * 0.15, 0)
+  controls.target.set(0, 0, 0)
   controls.update()
 }
 
@@ -72,6 +72,33 @@ const findSourceSkeleton = (object) => {
   return new THREE.Skeleton(bones)
 }
 
+const findPivotBone = (object) => {
+  let bestMatch = null
+  let fallbackMatch = null
+
+  object.traverse((child) => {
+    if (!child.isBone) {
+      return
+    }
+
+    const lowerName = String(child.name || '').toLowerCase()
+    if (!lowerName) {
+      return
+    }
+
+    if (!bestMatch && (lowerName === 'hips' || lowerName.includes('hip'))) {
+      bestMatch = child
+      return
+    }
+
+    if (!fallbackMatch && (lowerName.includes('pelvis') || lowerName.includes('spine'))) {
+      fallbackMatch = child
+    }
+  })
+
+  return bestMatch || fallbackMatch
+}
+
 const chooseIdleLikeClip = (clips = []) => {
   if (!Array.isArray(clips) || clips.length === 0) {
     return null
@@ -101,7 +128,7 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
     setViewerError('')
 
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color('#d7dbd6')
+    scene.background = null
 
     const camera = new THREE.PerspectiveCamera(35, container.clientWidth / container.clientHeight, 0.01, 100)
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
@@ -135,6 +162,7 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
+    controls.enablePan = false
     controls.autoRotate = false
     controls.autoRotateSpeed = 0
     controls.minDistance = 1
@@ -147,8 +175,10 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
     let hasLoadedModel = false
     let mixer = null
     let targetSkinnedMesh = null
+    let pivotBone = null
     const clock = new THREE.Clock()
     const worldUp = new THREE.Vector3(0, 1, 0)
+    const dynamicTarget = new THREE.Vector3()
 
     const captureEightViews = async () => {
       if (!loadedScene || !hasLoadedModel) {
@@ -218,6 +248,7 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
         loadedScene = gltf.scene
         scene.add(loadedScene)
         fitCameraToObject(camera, controls, loadedScene)
+        pivotBone = findPivotBone(loadedScene)
         hasLoadedModel = true
         targetSkinnedMesh = findFirstSkinnedMesh(loadedScene)
         const embeddedClip = chooseIdleLikeClip(gltf.animations || [])
@@ -293,6 +324,11 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
     resizeObserver.observe(container)
 
     renderer.setAnimationLoop(() => {
+      if (pivotBone && !isCapturingSnapshotsRef.current) {
+        pivotBone.getWorldPosition(dynamicTarget)
+        controls.target.set(dynamicTarget.x, dynamicTarget.y, dynamicTarget.z)
+      }
+
       controls.update()
       const delta = clock.getDelta()
       if (mixer && delta > 0 && !isCapturingSnapshotsRef.current) {
