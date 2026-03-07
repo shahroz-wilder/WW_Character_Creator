@@ -17,6 +17,22 @@ const VIEW_CAPTURE_PRESETS = [
   { key: 'front_left', label: 'Front_Left', yawDeg: 45 },
 ]
 
+const buildFloorGrid = (object) => {
+  const box = new THREE.Box3().setFromObject(object)
+  const size = box.getSize(new THREE.Vector3())
+  const maxHorizontalExtent = Math.max(size.x, size.z, 1)
+  const gridSize = Math.max(Math.ceil(maxHorizontalExtent * 2.8), 4)
+  const divisions = Math.max(Math.round(gridSize * 4), 16)
+  const grid = new THREE.GridHelper(gridSize, divisions, '#67707f', '#8f98a6')
+
+  grid.material.transparent = true
+  grid.material.opacity = 0.2
+  grid.material.depthWrite = false
+  grid.position.y = box.min.y + 0.002
+
+  return grid
+}
+
 const fitCameraToObject = (camera, controls, object) => {
   const box = new THREE.Box3().setFromObject(object)
   const size = box.getSize(new THREE.Vector3())
@@ -198,11 +214,10 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
     let loadedScene = null
     let hasLoadedModel = false
     let mixer = null
+    let floorGrid = null
     let targetSkinnedMesh = null
-    let pivotBone = null
     const clock = new THREE.Clock()
     const worldUp = new THREE.Vector3(0, 1, 0)
-    const dynamicTarget = new THREE.Vector3()
 
     const captureEightViews = async () => {
       if (!loadedScene || !hasLoadedModel) {
@@ -222,10 +237,14 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
 
       const screenshots = {}
       const originalBackground = scene.background
+      const originalGridVisibility = floorGrid?.visible ?? false
 
       isCapturingSnapshotsRef.current = true
       try {
         scene.background = null
+        if (floorGrid) {
+          floorGrid.visible = false
+        }
 
         for (const preset of VIEW_CAPTURE_PRESETS) {
           const direction = baseHorizontal
@@ -247,6 +266,9 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
         }
       } finally {
         scene.background = originalBackground
+        if (floorGrid) {
+          floorGrid.visible = originalGridVisibility
+        }
         camera.position.copy(originalPosition)
         camera.quaternion.copy(originalQuaternion)
         controls.target.copy(originalTarget)
@@ -268,7 +290,8 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
         loadedScene = gltf.scene
         scene.add(loadedScene)
         fitCameraToObject(camera, controls, loadedScene)
-        pivotBone = findPivotBone(loadedScene)
+        floorGrid = buildFloorGrid(loadedScene)
+        scene.add(floorGrid)
         hasLoadedModel = true
         targetSkinnedMesh = findFirstSkinnedMesh(loadedScene)
         const embeddedClip = chooseIdleLikeClip(gltf.animations || [])
@@ -344,11 +367,6 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
     resizeObserver.observe(container)
 
     renderer.setAnimationLoop(() => {
-      if (pivotBone && !isCapturingSnapshotsRef.current) {
-        pivotBone.getWorldPosition(dynamicTarget)
-        controls.target.set(dynamicTarget.x, dynamicTarget.y, dynamicTarget.z)
-      }
-
       controls.update()
       const delta = clock.getDelta()
       if (mixer && delta > 0 && !isCapturingSnapshotsRef.current) {
@@ -373,6 +391,11 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
       }
       if (loadedScene) {
         disposeSceneObject(loadedScene)
+      }
+      if (floorGrid) {
+        scene.remove(floorGrid)
+        floorGrid.geometry.dispose()
+        floorGrid.material.dispose()
       }
       renderer.dispose()
       if (container.contains(renderer.domElement)) {

@@ -10,6 +10,7 @@ describe('ModelViewer', () => {
 
   it('mounts and disposes the Three.js viewer cleanly', async () => {
     const sceneAdd = vi.fn()
+    const sceneRemove = vi.fn()
     const rendererDispose = vi.fn()
     const controlsDispose = vi.fn()
     const controlsReset = vi.fn()
@@ -30,6 +31,7 @@ describe('ModelViewer', () => {
           }
 
           add = sceneAdd
+          remove = sceneRemove
         },
         Color: class {
           constructor(value) {
@@ -69,7 +71,26 @@ describe('ModelViewer', () => {
           }
         },
         AmbientLight: class {},
+        GridHelper: class {
+          constructor() {
+            this.material = {
+              transparent: false,
+              opacity: 1,
+              depthWrite: true,
+              dispose: vi.fn(),
+            }
+            this.geometry = {
+              dispose: vi.fn(),
+            }
+            this.position = { y: 0 }
+            this.visible = true
+          }
+        },
         Box3: class {
+          constructor() {
+            this.min = { y: -1 }
+          }
+
           setFromObject() {
             return this
           }
@@ -172,6 +193,7 @@ describe('ModelViewer', () => {
 
     expect(rendererDispose).toHaveBeenCalled()
     expect(controlsDispose).toHaveBeenCalled()
+    expect(sceneRemove).toHaveBeenCalled()
     expect(controlsReset).not.toHaveBeenCalled()
   })
 })
