@@ -98,6 +98,20 @@ export const createTripoFrontBackTask = async (payload) =>
     body: JSON.stringify(payload),
   })
 
+export const createTripoRigTask = async (taskId) =>
+  requestJson(`/api/tripo/tasks/${encodeURIComponent(taskId)}/rig`, {
+    method: 'POST',
+  })
+
+export const createTripoRetargetTask = async (taskId, payload = {}) =>
+  requestJson(`/api/tripo/tasks/${encodeURIComponent(taskId)}/retarget`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
 export const getTripoTask = async (taskId, animationMode = '') => {
   const normalizedAnimationMode = String(animationMode || '').trim().toLowerCase()
   const query =
@@ -122,4 +136,9 @@ export const generateSpriteRun = async (payload) =>
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
+  })
+
+export const getHealth = async () =>
+  requestJson('/api/health', {
+    method: 'GET',
   })

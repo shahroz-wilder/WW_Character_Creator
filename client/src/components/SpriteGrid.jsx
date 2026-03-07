@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 
-const VIEW_LABELS = {
-  front: 'Front',
-  back: 'Back',
-  left: 'Left',
-  right: 'Right',
-}
+const SPRITE_VIEW_SLOTS = [
+  { key: 'view_360', label: '360', aliases: ['view_360', '360', 'turn360', 'orbit'] },
+  { key: 'front', label: 'Front', aliases: ['front'] },
+  { key: 'front_right', label: 'FrontRight', aliases: ['front_right', 'frontRight', 'frontright'] },
+  { key: 'right', label: 'Right', aliases: ['right'] },
+  { key: 'back_right', label: 'BackRight', aliases: ['back_right', 'backRight', 'backright'] },
+  { key: 'back', label: 'Back', aliases: ['back'] },
+  { key: 'back_left', label: 'BackLeft', aliases: ['back_left', 'backLeft', 'backleft', 'beckleft'] },
+  { key: 'left', label: 'Left', aliases: ['left'] },
+  { key: 'front_left', label: 'FrontLeft', aliases: ['front_left', 'frontLeft', 'frontleft'] },
+]
 
 const getFrames = (direction) => {
   if (Array.isArray(direction?.frameDataUrls) && direction.frameDataUrls.length > 0) {
@@ -19,12 +24,29 @@ const getFrames = (direction) => {
   return []
 }
 
+const resolveDirectionByAliases = (directions, aliases = []) => {
+  if (!directions || typeof directions !== 'object') {
+    return null
+  }
+
+  const keys = Array.isArray(aliases) ? aliases : []
+  for (const alias of keys) {
+    if (directions?.[alias]) {
+      return directions[alias]
+    }
+  }
+
+  return null
+}
+
 const AnimatedSpriteTile = ({ direction, label }) => {
   const frames = useMemo(() => getFrames(direction), [direction])
   const [frameIndex, setFrameIndex] = useState(0)
+  const [hasImageError, setHasImageError] = useState(false)
 
   useEffect(() => {
     setFrameIndex(0)
+    setHasImageError(false)
   }, [frames.length, direction?.previewDataUrl])
 
   useEffect(() => {
@@ -41,7 +63,7 @@ const AnimatedSpriteTile = ({ direction, label }) => {
     }
   }, [frames])
 
-  if (frames.length === 0) {
+  if (frames.length === 0 || hasImageError) {
     return (
       <div className="empty-state empty-state--compact">
         <p>{label} run preview will appear here.</p>
@@ -49,21 +71,29 @@ const AnimatedSpriteTile = ({ direction, label }) => {
     )
   }
 
-  return <img src={frames[frameIndex]} alt={`${label} run sprite preview`} />
+  return (
+    <img
+      src={frames[frameIndex]}
+      alt={`${label} run sprite preview`}
+      onError={() => setHasImageError(true)}
+    />
+  )
 }
 
 export function SpriteGrid({ directions, embedded = false }) {
+  const renderGrid = () => (
+    <div className="sprite-grid">
+      {SPRITE_VIEW_SLOTS.map(({ key, label, aliases }) => (
+        <article className="view-card" key={key}>
+          <span className="view-card__label">{label}</span>
+          <AnimatedSpriteTile direction={resolveDirectionByAliases(directions, aliases)} label={label} />
+        </article>
+      ))}
+    </div>
+  )
+
   if (embedded) {
-    return (
-      <div className="multiview-grid">
-        {Object.entries(VIEW_LABELS).map(([key, label]) => (
-          <article className="view-card" key={key}>
-            <span className="view-card__label">{label}</span>
-            <AnimatedSpriteTile direction={directions?.[key]} label={label} />
-          </article>
-        ))}
-      </div>
-    )
+    return renderGrid()
   }
 
   return (
@@ -72,14 +102,7 @@ export function SpriteGrid({ directions, embedded = false }) {
         <p className="step-label">Step 04</p>
         <h2>Sprite</h2>
       </div>
-      <div className="multiview-grid">
-        {Object.entries(VIEW_LABELS).map(([key, label]) => (
-          <article className="view-card" key={key}>
-            <span className="view-card__label">{label}</span>
-            <AnimatedSpriteTile direction={directions?.[key]} label={label} />
-          </article>
-        ))}
-      </div>
+      {renderGrid()}
     </section>
   )
 }

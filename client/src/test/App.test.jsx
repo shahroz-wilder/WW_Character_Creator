@@ -1,14 +1,17 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
 import {
   createTripoFrontBackTask,
   createTripoFrontTask,
+  createTripoRetargetTask,
+  createTripoRigTask,
   createTripoTask,
   generateMultiview,
   generatePortrait,
   generateSpriteRun,
+  getHealth,
   getTripoTask,
   restartDevServer,
 } from '../api/characterApi'
@@ -17,9 +20,12 @@ vi.mock('../api/characterApi', () => ({
   generatePortrait: vi.fn(),
   generateMultiview: vi.fn(),
   generateSpriteRun: vi.fn(),
+  getHealth: vi.fn(),
   createTripoTask: vi.fn(),
   createTripoFrontBackTask: vi.fn(),
   createTripoFrontTask: vi.fn(),
+  createTripoRigTask: vi.fn(),
+  createTripoRetargetTask: vi.fn(),
   getTripoTask: vi.fn(),
   restartDevServer: vi.fn(),
 }))
@@ -100,6 +106,16 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: '3D Multiview' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '3D FrontBack' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '3D Front' })).toBeDisabled()
+  })
+
+  beforeEach(() => {
+    getHealth.mockResolvedValue({
+      status: 'ok',
+      versions: {
+        tripoModelVersion: 'v3.1-20260211',
+        tripoRigModelVersion: 'v2.0-20250506',
+      },
+    })
   })
 
   it('shows DEV sprite controls and keeps sprite button disabled until full multiview exists', async () => {
@@ -215,7 +231,40 @@ describe('App', () => {
     expect(screen.getByRole('combobox', { name: 'Sprite Size' })).toHaveValue('128')
   })
 
-  it('submits Tripo static mode when selected in DEV', async () => {
+  it('loads an existing Tripo task id from DEV without regenerating mesh', async () => {
+    getTripoTask.mockResolvedValue({
+      taskId: 'existing-mesh-1',
+      taskType: 'image_to_model',
+      sourceTaskId: '',
+      status: 'success',
+      progress: 100,
+      error: '',
+      outputs: {
+        modelUrl: '/api/tripo/tasks/existing-mesh-1/model?variant=model&animationMode=static',
+        downloadUrl: '/api/tripo/tasks/existing-mesh-1/model?variant=model&animationMode=static',
+        variant: 'model',
+        variants: {
+          model: '/api/tripo/tasks/existing-mesh-1/model?variant=model&animationMode=static',
+        },
+      },
+    })
+
+    render(<App />)
+    const user = userEvent.setup()
+
+    await openDevPanel(user)
+    await user.type(screen.getByRole('textbox', { name: 'Load Existing Tripo Task ID' }), 'existing-mesh-1')
+    await user.click(screen.getByRole('button', { name: 'Load Existing Task' }))
+
+    await waitFor(() => expect(getTripoTask).toHaveBeenCalledWith('existing-mesh-1', 'static'))
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-stub')).toHaveTextContent(
+        '/api/tripo/tasks/existing-mesh-1/model?variant=model&animationMode=static',
+      )
+    })
+  })
+
+  it('submits mesh-only Tripo creation from multiview', async () => {
     generatePortrait.mockResolvedValue({
       imageDataUrl: makeDataUrl('portrait'),
       promptUsed: 'pilot',
@@ -232,7 +281,6 @@ describe('App', () => {
     const user = userEvent.setup()
 
     await generatePortraitThenMultiview(user)
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Tripo Mode' }), 'static')
     await user.click(screen.getByRole('button', { name: '3D Multiview' }))
 
     await waitFor(() =>
@@ -243,7 +291,8 @@ describe('App', () => {
           left: makeDataUrl('left'),
           right: makeDataUrl('right'),
         },
-        animationMode: 'static',
+        meshQuality: 'standard',
+        textureQuality: 'standard',
       }),
     )
   })
@@ -273,12 +322,13 @@ describe('App', () => {
           front: makeDataUrl('front'),
           back: makeDataUrl('back'),
         },
-        animationMode: 'static',
+        meshQuality: 'standard',
+        textureQuality: 'standard',
       }),
     )
   })
 
-  it('switches between animated and A-pose model variants after Tripo completes', async () => {
+  it('runs explicit rig and retarget steps before switching preview pose', async () => {
     generatePortrait.mockResolvedValue({
       imageDataUrl: makeDataUrl('portrait'),
       promptUsed: 'pilot',
@@ -287,21 +337,39 @@ describe('App', () => {
     })
     generateMultiview.mockResolvedValue(makeFullMultiviewResult())
     createTripoTask.mockResolvedValue({
-      taskId: 'task-variant-1',
-      status: 'queued',
+      taskId: 'task-base-1',
+      taskType: 'multiview_to_model',
+      status: 'success',
+      progress: 100,
+    })
+    createTripoRigTask.mockResolvedValue({
+      taskId: 'task-rig-1',
+      taskType: 'animate_rig',
+      sourceTaskId: 'task-base-1',
+      status: 'success',
+      progress: 100,
+    })
+    createTripoRetargetTask.mockResolvedValue({
+      taskId: 'task-anim-1',
+      taskType: 'animate_retarget',
+      sourceTaskId: 'task-rig-1',
+      status: 'success',
+      progress: 100,
     })
     getTripoTask.mockResolvedValue({
-      taskId: 'task-variant-1',
+      taskId: 'task-anim-1',
+      taskType: 'animate_retarget',
+      sourceTaskId: 'task-rig-1',
       status: 'success',
       progress: 100,
       error: '',
       outputs: {
-        modelUrl: '/api/tripo/tasks/task-variant-1/model?variant=animation_model',
-        downloadUrl: '/api/tripo/tasks/task-variant-1/model?variant=animation_model',
+        modelUrl: '/api/tripo/tasks/task-anim-1/model?variant=animation_model',
+        downloadUrl: '/api/tripo/tasks/task-anim-1/model?variant=animation_model',
         variant: 'animation_model',
         variants: {
-          animation_model: '/api/tripo/tasks/task-variant-1/model?variant=animation_model',
-          rigged_model: '/api/tripo/tasks/task-variant-1/model?variant=rigged_model',
+          animation_model: '/api/tripo/tasks/task-anim-1/model?variant=animation_model',
+          rigged_model: '/api/tripo/tasks/task-anim-1/model?variant=rigged_model',
         },
       },
     })
@@ -310,13 +378,21 @@ describe('App', () => {
     const user = userEvent.setup()
 
     await generatePortraitThenMultiview(user)
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Tripo Mode' }), 'animated')
     await user.click(screen.getByRole('button', { name: '3D Multiview' }))
+    await user.click(screen.getAllByRole('button', { name: 'Animate Rig' })[0])
+    await waitFor(() => expect(createTripoRigTask).toHaveBeenCalledWith('task-base-1'))
+    await user.type(screen.getByRole('textbox', { name: 'Retarget Animation' }), 'preset:walk')
+    await user.click(screen.getAllByRole('button', { name: 'Animate Retarget' })[0])
+    await waitFor(() =>
+      expect(createTripoRetargetTask).toHaveBeenCalledWith('task-rig-1', {
+        animationName: 'preset:walk',
+      }),
+    )
     await user.click(screen.getByRole('button', { name: 'Force Pull Result' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('viewer-stub')).toHaveTextContent(
-        '/api/tripo/tasks/task-variant-1/model?variant=animation_model',
+        '/api/tripo/tasks/task-anim-1/model?variant=animation_model',
       )
     })
 
@@ -324,9 +400,74 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('viewer-stub')).toHaveTextContent(
-        '/api/tripo/tasks/task-variant-1/model?variant=rigged_model',
+        '/api/tripo/tasks/task-anim-1/model?variant=rigged_model',
       )
     })
+  })
+
+  it('allows retargeting again from a successful animation task by using its source rig task', async () => {
+    window.localStorage.setItem(
+      'ww-character-session-v1',
+      JSON.stringify({
+        prompt: 'pilot',
+        multiviewPrompt: 'default multiview',
+        devSettings: {
+          portraitAspectRatio: '1:1',
+          portraitPromptPreset: 'preset',
+          spriteSize: 128,
+          tripoRetargetAnimationName: '',
+        },
+        portraitResult: {
+          imageDataUrl: makeDataUrl('portrait'),
+          promptUsed: 'pilot',
+          inputMode: 'prompt',
+          originalReferenceImageDataUrl: '',
+        },
+        multiviewResult: makeFullMultiviewResult(),
+        spriteResult: makeSpriteResult(128),
+        currentRunId: 'run-1',
+        history: [],
+        tripoJob: {
+          taskId: 'task-anim-existing-1',
+          taskType: 'animate_retarget',
+          sourceTaskId: 'task-rig-existing-1',
+          status: 'success',
+          progress: 100,
+          error: '',
+          outputs: {
+            modelUrl: '/api/tripo/tasks/task-anim-existing-1/model?variant=animation_model',
+            downloadUrl: '/api/tripo/tasks/task-anim-existing-1/model?variant=animation_model',
+            variant: 'animation_model',
+            variants: {
+              animation_model: '/api/tripo/tasks/task-anim-existing-1/model?variant=animation_model',
+              rigged_model: '/api/tripo/tasks/task-anim-existing-1/model?variant=rigged_model',
+            },
+          },
+          animationMode: 'animated',
+        },
+      }),
+    )
+    createTripoRetargetTask.mockResolvedValue({
+      taskId: 'task-anim-new-1',
+      taskType: 'animate_retarget',
+      sourceTaskId: 'task-rig-existing-1',
+      status: 'queued',
+      progress: 0,
+    })
+
+    render(<App />)
+    const user = userEvent.setup()
+
+    await openDevPanel(user)
+    await user.clear(screen.getByRole('textbox', { name: 'Retarget Animation' }))
+    await user.type(screen.getByRole('textbox', { name: 'Retarget Animation' }), 'preset:run')
+    await user.click(screen.getAllByRole('button', { name: 'Animate Retarget' })[0])
+
+    await waitFor(() =>
+      expect(createTripoRetargetTask).toHaveBeenCalledWith('task-anim-existing-1', {
+        animationName: 'preset:run',
+      }),
+    )
   })
 
   it('still supports front-only Tripo task creation', async () => {

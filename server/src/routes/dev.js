@@ -27,4 +27,3 @@ export const createDevRouter = ({ requestServerRestart } = {}) => {
 
   return router
 }
-

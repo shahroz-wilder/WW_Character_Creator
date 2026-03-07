@@ -8,6 +8,8 @@ export const createTripoRouter = ({ tripoService }) => {
     try {
       const result = await tripoService.createTaskFromViews(req.body?.views, {
         animationMode: req.body?.animationMode,
+        meshQuality: req.body?.meshQuality,
+        textureQuality: req.body?.textureQuality,
       })
       res.json(result)
     } catch (error) {
@@ -20,6 +22,8 @@ export const createTripoRouter = ({ tripoService }) => {
     try {
       const result = await tripoService.createTaskFromFrontView(req.body?.imageDataUrl, {
         animationMode: req.body?.animationMode,
+        meshQuality: req.body?.meshQuality,
+        textureQuality: req.body?.textureQuality,
       })
       res.json(result)
     } catch (error) {
@@ -32,6 +36,30 @@ export const createTripoRouter = ({ tripoService }) => {
     try {
       const result = await tripoService.createTaskFromFrontBackViews(req.body?.views, {
         animationMode: req.body?.animationMode,
+        meshQuality: req.body?.meshQuality,
+        textureQuality: req.body?.textureQuality,
+      })
+      res.json(result)
+    } catch (error) {
+      const { statusCode, body } = toErrorResponse(error)
+      res.status(statusCode).json(body)
+    }
+  })
+
+  router.post('/tasks/:taskId/rig', async (req, res) => {
+    try {
+      const result = await tripoService.createRigTask(req.params.taskId)
+      res.json(result)
+    } catch (error) {
+      const { statusCode, body } = toErrorResponse(error)
+      res.status(statusCode).json(body)
+    }
+  })
+
+  router.post('/tasks/:taskId/retarget', async (req, res) => {
+    try {
+      const result = await tripoService.createRetargetTask(req.params.taskId, {
+        animationName: req.body?.animationName,
       })
       res.json(result)
     } catch (error) {
@@ -47,6 +75,8 @@ export const createTripoRouter = ({ tripoService }) => {
       })
       res.json({
         taskId: summary.taskId,
+        taskType: summary.taskType,
+        sourceTaskId: summary.sourceTaskId,
         status: summary.status,
         progress: summary.progress,
         error: summary.error,

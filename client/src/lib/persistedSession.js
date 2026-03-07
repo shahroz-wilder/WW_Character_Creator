@@ -22,10 +22,13 @@ const normalizeHistoryEntry = (entry) => ({
 
 const normalizeTripoJob = (job) => ({
   taskId: job?.taskId || '',
+  taskType: job?.taskType || '',
+  sourceTaskId: job?.sourceTaskId || '',
   status: job?.status || 'idle',
   progress: Number.isFinite(job?.progress) ? job.progress : 0,
   error: job?.error || '',
   outputs: job?.outputs || null,
+  animationMode: job?.animationMode === 'static' ? 'static' : job?.animationMode === 'animated' ? 'animated' : '',
 })
 
 const normalizePortraitResult = (portraitResult) =>
@@ -69,6 +72,10 @@ const normalizeDevSettings = (devSettings) => ({
   portraitPromptPreset: devSettings?.portraitPromptPreset || '',
   spriteSize: Number(devSettings?.spriteSize) || 64,
   tripoAnimationMode: devSettings?.tripoAnimationMode === 'static' ? 'static' : 'animated',
+  tripoRetargetAnimationName: String(devSettings?.tripoRetargetAnimationName || ''),
+  tripoMeshQuality: devSettings?.tripoMeshQuality === 'detailed' ? 'detailed' : 'standard',
+  tripoTextureQuality: devSettings?.tripoTextureQuality === 'detailed' ? 'detailed' : 'standard',
+  defaultSpritesEnabled: Boolean(devSettings?.defaultSpritesEnabled),
 })
 
 const openDatabase = () => {

@@ -546,6 +546,7 @@
   min-height: 0;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .portrait-card--empty {
@@ -623,14 +624,21 @@
 .action-row--portrait {
   align-items: center;
   display: grid;
-  grid-template-columns: 56px auto 56px;
+  grid-template-columns: 46px auto 46px;
   justify-content: center;
   margin-top: 10px;
 }
 
 .action-row--portrait .primary-button {
+  min-height: 46px;
+  height: 46px;
   min-width: 140px;
   justify-content: center;
+}
+
+.action-row--portrait .icon-button {
+  width: 46px;
+  height: 46px;
 }
 
 .action-row__spacer {
@@ -789,6 +797,15 @@
   min-height: 0;
 }
 
+.sprite-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .view-card {
   display: flex;
   flex-direction: column;
@@ -831,6 +848,11 @@
 .zoom-badge svg {
   width: 14px;
   height: 14px;
+}
+
+.portrait-card .zoom-badge {
+  top: 18px;
+  right: 18px;
 }
 
 .view-card img {
@@ -909,6 +931,16 @@
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+}
+
+.sprite-grid .view-card .empty-state p {
+  font-size: 0.5rem;
+  line-height: 1.2;
+}
+
+.sprite-grid .view-card__label {
+  font-size: 0.42rem;
+  line-height: 1.1;
 }
 
 .empty-state,
@@ -1122,6 +1154,11 @@
   .multiview-grid {
     grid-template-columns: 1fr;
     grid-template-rows: none;
+  }
+
+  .sprite-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(3, minmax(0, 1fr));
   }
 
   .job-panel__header,

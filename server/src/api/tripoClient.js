@@ -10,7 +10,7 @@ const parseJson = async (response) => {
   }
 }
 
-export const createTripoClient = ({ apiKey, baseUrl }) => {
+export const createTripoClient = ({ apiKey, baseUrl, auditLogger = null }) => {
   const request = async (path, options = {}) => {
     const response = await fetch(`${baseUrl}${path}`, {
       ...options,
@@ -30,6 +30,47 @@ export const createTripoClient = ({ apiKey, baseUrl }) => {
     }
 
     return parseJson(response)
+  }
+
+  const submitTask = async ({
+    action,
+    requestBody,
+    missingTaskIdMessage,
+  }) => {
+    try {
+      const payload = await request('/task', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      const taskId = payload?.data?.task_id
+      if (!taskId) {
+        throw new AppError(missingTaskIdMessage, 502)
+      }
+
+      await auditLogger?.logSubmission({
+        action,
+        path: '/task',
+        baseUrl,
+        requestBody,
+        responseBody: payload,
+        taskId,
+      })
+
+      return taskId
+    } catch (error) {
+      await auditLogger?.logFailure({
+        action,
+        path: '/task',
+        baseUrl,
+        requestBody,
+        error,
+      })
+      throw error
+    }
   }
 
   return {
@@ -54,44 +95,26 @@ export const createTripoClient = ({ apiKey, baseUrl }) => {
       }
     },
     async createMultiviewTask({ files, options }) {
-      const payload = await request('/task', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+      return submitTask({
+        action: 'multiview_to_model',
+        requestBody: {
           type: 'multiview_to_model',
           files,
           ...options,
-        }),
+        },
+        missingTaskIdMessage: 'Tripo did not return a task id.',
       })
-
-      const taskId = payload?.data?.task_id
-      if (!taskId) {
-        throw new AppError('Tripo did not return a task id.', 502)
-      }
-
-      return taskId
     },
     async createImageTask({ file, options }) {
-      const payload = await request('/task', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+      return submitTask({
+        action: 'image_to_model',
+        requestBody: {
           type: 'image_to_model',
           file,
           ...options,
-        }),
+        },
+        missingTaskIdMessage: 'Tripo did not return a task id.',
       })
-
-      const taskId = payload?.data?.task_id
-      if (!taskId) {
-        throw new AppError('Tripo did not return a task id.', 502)
-      }
-
-      return taskId
     },
     async createRigTask({
       originalModelTaskId,
@@ -100,27 +123,18 @@ export const createTripoClient = ({ apiKey, baseUrl }) => {
       spec = 'tripo',
       modelVersion = 'v1.0-20240301',
     }) {
-      const payload = await request('/task', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+      return submitTask({
+        action: 'animate_rig',
+        requestBody: {
           type: 'animate_rig',
           original_model_task_id: originalModelTaskId,
           out_format: outFormat,
           rig_type: rigType,
           spec,
           model_version: modelVersion,
-        }),
+        },
+        missingTaskIdMessage: 'Tripo did not return a rig task id.',
       })
-
-      const taskId = payload?.data?.task_id
-      if (!taskId) {
-        throw new AppError('Tripo did not return a rig task id.', 502)
-      }
-
-      return taskId
     },
     async createAnimationTask({
       originalModelTaskId,
@@ -138,20 +152,11 @@ export const createTripoClient = ({ apiKey, baseUrl }) => {
         requestBody.animate_in_place = Boolean(animateInPlace)
       }
 
-      const payload = await request('/task', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
+      return submitTask({
+        action: taskType,
+        requestBody,
+        missingTaskIdMessage: 'Tripo did not return an animation task id.',
       })
-
-      const taskId = payload?.data?.task_id
-      if (!taskId) {
-        throw new AppError('Tripo did not return an animation task id.', 502)
-      }
-
-      return taskId
     },
     async getTask(taskId) {
       const payload = await request(`/task/${taskId}`, { method: 'GET' })

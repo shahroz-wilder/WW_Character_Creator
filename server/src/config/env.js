@@ -38,6 +38,7 @@ export const loadEnv = (source = process.env) => {
     tripoModelVersion: source.TRIPO_MODEL_VERSION || 'v3.1-20260211',
     tripoTexture: parseBoolean(source.TRIPO_TEXTURE, true),
     tripoPbr: parseBoolean(source.TRIPO_PBR, true),
+    tripoMeshQuality: source.TRIPO_MESH_QUALITY || 'standard',
     tripoTextureQuality: source.TRIPO_TEXTURE_QUALITY || 'standard',
     tripoTextureAlignment: source.TRIPO_TEXTURE_ALIGNMENT || 'original_image',
     tripoOrientation: source.TRIPO_ORIENTATION || 'default',

@@ -3,10 +3,13 @@ import JSZip from 'jszip'
 import {
   createTripoFrontBackTask,
   createTripoFrontTask,
+  createTripoRetargetTask,
+  createTripoRigTask,
   createTripoTask,
   generateMultiview,
   generatePortrait,
   generateSpriteRun,
+  getHealth,
   getTripoTask,
   restartDevServer,
 } from './api/characterApi'
@@ -29,6 +32,8 @@ import {
 
 const EMPTY_JOB = {
   taskId: '',
+  taskType: '',
+  sourceTaskId: '',
   status: 'idle',
   progress: 0,
   error: '',
@@ -55,6 +60,10 @@ const DEV_PRESETS = {
   multiviewPreset: DEFAULT_MULTIVIEW_PROMPT,
   spriteSize: 64,
   tripoAnimationMode: 'static',
+  tripoRetargetAnimationName: '',
+  tripoMeshQuality: 'standard',
+  tripoTextureQuality: 'standard',
+  defaultSpritesEnabled: false,
 }
 
 const MULTIVIEW_ORDER = ['front', 'back', 'left', 'right']
@@ -73,10 +82,51 @@ const MODEL_VIEW_CROP_MARGIN_RATIO = 0.06
 const MODEL_VIEW_ALPHA_THRESHOLD = 1
 const MODEL_VIEW_PIXEL_ART_MODE = true
 const VALID_SPRITE_SIZES = new Set([64, 84, 128])
+const TRIPO_QUALITY_LABELS = {
+  standard: 'Standard',
+  detailed: 'Ultra',
+}
+const TRIPO_QUALITY_VALUES = new Set(Object.keys(TRIPO_QUALITY_LABELS))
 const GIF_TRANSPARENT_HEX = 0xff00ff
 const GIF_TRANSPARENT_CSS = '#ff00ff'
 const GIF_TRANSPARENT_RGB = { r: 255, g: 0, b: 255 }
 const GIF_ALPHA_CUTOFF = 8
+const DEFAULT_SPRITE_FILES = {
+  view_360: '/default-sprites/360.gif',
+  front: '/default-sprites/front.gif',
+  front_right: '/default-sprites/front_right.gif',
+  right: '/default-sprites/right.gif',
+  back_right: '/default-sprites/back_right.gif',
+  back: '/default-sprites/back.gif',
+  back_left: '/default-sprites/back_left.gif',
+  left: '/default-sprites/left.gif',
+  front_left: '/default-sprites/front_left.gif',
+}
+
+const appendCacheBust = (url, cacheKey) => {
+  if (!cacheKey) {
+    return url
+  }
+
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}v=${cacheKey}`
+}
+
+const buildDefaultSpriteDirections = (cacheKey) =>
+  Object.fromEntries(
+    Object.entries(DEFAULT_SPRITE_FILES).map(([direction, fileUrl]) => {
+      const resolvedUrl = appendCacheBust(fileUrl, cacheKey)
+
+      return [
+        direction,
+        {
+          previewDataUrl: resolvedUrl,
+          frameDataUrls: [resolvedUrl],
+          source: 'default-sprite-pack',
+        },
+      ]
+    }),
+  )
 
 const mimeTypeToExtension = (mimeType = 'image/png') => {
   if (mimeType.includes('jpeg') || mimeType.includes('jpg')) {
@@ -223,6 +273,23 @@ const formatModelLabel = (value) => {
   return trimmed || 'Not generated yet.'
 }
 
+const getAnimationModeForTaskType = (taskType) => {
+  const normalizedTaskType = String(taskType || '').trim().toLowerCase()
+  return normalizedTaskType === 'animate_retarget' || normalizedTaskType === 'animate_model'
+    ? 'animated'
+    : 'static'
+}
+
+const formatTripoTaskTypeLabel = (value) => {
+  const normalizedValue = String(value || '').trim()
+
+  if (!normalizedValue) {
+    return 'Not started'
+  }
+
+  return normalizedValue.replace(/_/g, ' ')
+}
+
 const MODEL_OUTPUT_VARIANT_ORDER = [
   'animation_model',
   'animated_model',
@@ -263,6 +330,11 @@ const normalizeAnimationMode = (value) => {
   return normalizedValue === 'animated' || normalizedValue === 'static' ? normalizedValue : ''
 }
 
+const normalizeTripoQuality = (value, fallback = DEV_PRESETS.tripoMeshQuality) => {
+  const normalizedValue = String(value || '').trim().toLowerCase()
+  return TRIPO_QUALITY_VALUES.has(normalizedValue) ? normalizedValue : fallback
+}
+
 function App() {
   const [initialSession] = useState(() => loadPersistedSession())
   const [prompt, setPrompt] = useState(() => initialSession?.prompt || '')
@@ -274,6 +346,20 @@ function App() {
     spriteSize: Number(initialSession?.devSettings?.spriteSize) || DEV_PRESETS.spriteSize,
     tripoAnimationMode:
       initialSession?.devSettings?.tripoAnimationMode || DEV_PRESETS.tripoAnimationMode,
+    tripoRetargetAnimationName:
+      initialSession?.devSettings?.tripoRetargetAnimationName || DEV_PRESETS.tripoRetargetAnimationName,
+    tripoMeshQuality: normalizeTripoQuality(
+      initialSession?.devSettings?.tripoMeshQuality,
+      DEV_PRESETS.tripoMeshQuality,
+    ),
+    tripoTextureQuality: normalizeTripoQuality(
+      initialSession?.devSettings?.tripoTextureQuality,
+      DEV_PRESETS.tripoTextureQuality,
+    ),
+    defaultSpritesEnabled:
+      typeof initialSession?.devSettings?.defaultSpritesEnabled === 'boolean'
+        ? initialSession.devSettings.defaultSpritesEnabled
+        : DEV_PRESETS.defaultSpritesEnabled,
   }))
   const [portraitResult, setPortraitResult] = useState(() => initialSession?.portraitResult || null)
   const [multiviewPrompt, setMultiviewPrompt] = useState(
@@ -296,8 +382,11 @@ function App() {
   const [isCreatingModel, setIsCreatingModel] = useState(false)
   const [isCreatingFrontBackModel, setIsCreatingFrontBackModel] = useState(false)
   const [isCreatingFrontModel, setIsCreatingFrontModel] = useState(false)
+  const [isCreatingRigTask, setIsCreatingRigTask] = useState(false)
+  const [isCreatingRetargetTask, setIsCreatingRetargetTask] = useState(false)
   const [isGeneratingSprite, setIsGeneratingSprite] = useState(false)
   const [isRefreshingTripoJob, setIsRefreshingTripoJob] = useState(false)
+  const [isLoadingExistingTripoTask, setIsLoadingExistingTripoTask] = useState(false)
   const [isRestartingServer, setIsRestartingServer] = useState(false)
   const [hasHydratedPersistedSession, setHasHydratedPersistedSession] = useState(false)
   const [viewerResetSignal, setViewerResetSignal] = useState(0)
@@ -306,6 +395,12 @@ function App() {
   const [isCapturingModelViews, setIsCapturingModelViews] = useState(false)
   const [isBuildingModelViewGif, setIsBuildingModelViewGif] = useState(false)
   const [modelPreviewMode, setModelPreviewMode] = useState('animated')
+  const [defaultSpritesCacheKey, setDefaultSpritesCacheKey] = useState(() => Date.now())
+  const [existingTripoTaskIdInput, setExistingTripoTaskIdInput] = useState('')
+  const [healthVersions, setHealthVersions] = useState(() => ({
+    tripoModelVersion: '',
+    tripoRigModelVersion: '',
+  }))
   const viewerCaptureApiRef = useRef(null)
   const modelOutputVariants = tripoJob.outputs?.variants || null
   const hasModelViewPack = MODEL_VIEW_CAPTURE_ORDER.some((view) => Boolean(modelViewPack?.[view.key]?.dataUrl))
@@ -334,6 +429,21 @@ function App() {
     (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
     tripoJob.outputs?.downloadUrl ||
     ''
+  const activeSpriteDirections = devSettings.defaultSpritesEnabled
+    ? buildDefaultSpriteDirections(defaultSpritesCacheKey)
+    : spriteResult?.directions
+  const retargetStartTaskId =
+    tripoJob.taskType === 'animate_rig'
+      ? tripoJob.taskId
+      : ['animate_retarget', 'animate_model'].includes(tripoJob.taskType)
+        ? tripoJob.taskId
+        : ''
+  const canAnimateRig = Boolean(
+    tripoJob.taskId &&
+      tripoJob.status === 'success' &&
+      ['multiview_to_model', 'image_to_model'].includes(tripoJob.taskType),
+  )
+  const canAnimateRetarget = Boolean(retargetStartTaskId && tripoJob.status === 'success')
 
   const currentPipelineState = error
     ? 'Attention needed'
@@ -351,12 +461,20 @@ function App() {
               ? 'Submitting front-back model'
               : isCreatingFrontModel
                 ? 'Submitting front-view model'
-                : isRefreshingTripoJob
-                  ? 'Refreshing Tripo result'
-                  : tripoJob.status === 'success'
-                    ? '3D model ready'
+                : isCreatingRigTask
+                  ? 'Submitting rig task'
+                  : isCreatingRetargetTask
+                    ? 'Submitting retarget task'
+                  : isRefreshingTripoJob
+                    ? 'Refreshing Tripo result'
+                    : tripoJob.status === 'success'
+                      ? '3D model ready'
                     : tripoJob.status === 'running'
-                      ? 'Tripo is building the model'
+                      ? tripoJob.taskType === 'animate_rig'
+                        ? 'Tripo is rigging the model'
+                        : tripoJob.taskType === 'animate_retarget'
+                          ? 'Tripo is applying animation'
+                          : 'Tripo is building the model'
                       : tripoJob.status === 'queued'
                         ? 'Tripo task queued'
                         : portraitResult?.imageDataUrl
@@ -372,6 +490,29 @@ function App() {
 
   useEffect(() => {
     document.title = 'WW Character Creator'
+  }, [])
+
+  useEffect(() => {
+    let isCancelled = false
+
+    getHealth()
+      .then((response) => {
+        if (isCancelled) {
+          return
+        }
+
+        setHealthVersions({
+          tripoModelVersion: response?.versions?.tripoModelVersion || '',
+          tripoRigModelVersion: response?.versions?.tripoRigModelVersion || '',
+        })
+      })
+      .catch(() => {
+        // Health metadata is optional for UI diagnostics.
+      })
+
+    return () => {
+      isCancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -397,6 +538,21 @@ function App() {
             Number(session.devSettings?.spriteSize) || currentDevSettings.spriteSize,
           tripoAnimationMode:
             session.devSettings?.tripoAnimationMode || currentDevSettings.tripoAnimationMode,
+          tripoRetargetAnimationName:
+            session.devSettings?.tripoRetargetAnimationName ??
+            currentDevSettings.tripoRetargetAnimationName,
+          tripoMeshQuality: normalizeTripoQuality(
+            session.devSettings?.tripoMeshQuality,
+            currentDevSettings.tripoMeshQuality,
+          ),
+          tripoTextureQuality: normalizeTripoQuality(
+            session.devSettings?.tripoTextureQuality,
+            currentDevSettings.tripoTextureQuality,
+          ),
+          defaultSpritesEnabled:
+            typeof session.devSettings?.defaultSpritesEnabled === 'boolean'
+              ? session.devSettings.defaultSpritesEnabled
+              : currentDevSettings.defaultSpritesEnabled,
         }))
         setPortraitResult((currentPortraitResult) =>
           session.portraitResult?.imageDataUrl ? session.portraitResult : currentPortraitResult,
@@ -473,8 +629,12 @@ function App() {
       return
     }
 
-    setModelPreviewMode(tripoJob.animationMode === 'static' ? 'apose' : 'animated')
-  }, [tripoJob.taskId])
+    setModelPreviewMode(
+      tripoJob.taskType === 'animate_retarget' || tripoJob.taskType === 'animate_model'
+        ? 'animated'
+        : 'apose',
+    )
+  }, [tripoJob.taskId, tripoJob.taskType])
 
   const handleViewerCaptureApiReady = useCallback((captureApi) => {
     viewerCaptureApiRef.current = captureApi || null
@@ -497,6 +657,31 @@ function App() {
     const nextJob = await getTripoTask(taskId, animationMode)
 
     return nextJob
+  }
+
+  const applyTripoTaskStart = (
+    result,
+    { animationMode = '', fallbackTaskType = '', fallbackSourceTaskId = '' } = {},
+  ) => {
+    setTripoJob({
+      taskId: result.taskId,
+      taskType: result.taskType || fallbackTaskType,
+      sourceTaskId: result.sourceTaskId || fallbackSourceTaskId,
+      status: result.status || 'queued',
+      progress: Number.isFinite(result.progress) ? result.progress : 0,
+      error: result.error || '',
+      outputs: null,
+      animationMode,
+    })
+
+    if (currentRunId) {
+      setHistory((currentHistory) =>
+        updateHistoryEntry(currentHistory, currentRunId, {
+          tripoTaskId: result.taskId,
+          tripoStatus: result.status || 'queued',
+        }),
+      )
+    }
   }
 
   useEffect(() => {
@@ -672,27 +857,14 @@ function App() {
           left: multiviewResult.views.left.imageDataUrl,
           right: multiviewResult.views.right.imageDataUrl,
         },
-        animationMode: devSettings.tripoAnimationMode,
+        meshQuality: devSettings.tripoMeshQuality,
+        textureQuality: devSettings.tripoTextureQuality,
       })
-      setModelPreviewMode(devSettings.tripoAnimationMode === 'static' ? 'apose' : 'animated')
-
-      setTripoJob({
-        taskId: result.taskId,
-        status: result.status,
-        progress: 0,
-        error: '',
-        outputs: null,
-        animationMode: devSettings.tripoAnimationMode,
+      setModelPreviewMode('apose')
+      applyTripoTaskStart(result, {
+        animationMode: 'static',
+        fallbackTaskType: 'multiview_to_model',
       })
-
-      if (currentRunId) {
-        setHistory((currentHistory) =>
-          updateHistoryEntry(currentHistory, currentRunId, {
-            tripoTaskId: result.taskId,
-            tripoStatus: result.status,
-          }),
-        )
-      }
     } catch (requestError) {
       setError(requestError.message)
     } finally {
@@ -714,27 +886,14 @@ function App() {
     try {
       const result = await createTripoFrontTask({
         imageDataUrl: frontImageDataUrl,
-        animationMode: devSettings.tripoAnimationMode,
+        meshQuality: devSettings.tripoMeshQuality,
+        textureQuality: devSettings.tripoTextureQuality,
       })
-      setModelPreviewMode(devSettings.tripoAnimationMode === 'static' ? 'apose' : 'animated')
-
-      setTripoJob({
-        taskId: result.taskId,
-        status: result.status,
-        progress: 0,
-        error: '',
-        outputs: null,
-        animationMode: devSettings.tripoAnimationMode,
+      setModelPreviewMode('apose')
+      applyTripoTaskStart(result, {
+        animationMode: 'static',
+        fallbackTaskType: 'image_to_model',
       })
-
-      if (currentRunId) {
-        setHistory((currentHistory) =>
-          updateHistoryEntry(currentHistory, currentRunId, {
-            tripoTaskId: result.taskId,
-            tripoStatus: result.status,
-          }),
-        )
-      }
     } catch (requestError) {
       setError(requestError.message)
     } finally {
@@ -776,31 +935,69 @@ function App() {
           front: frontImageDataUrl,
           back: backImageDataUrl,
         },
-        animationMode: devSettings.tripoAnimationMode,
+        meshQuality: devSettings.tripoMeshQuality,
+        textureQuality: devSettings.tripoTextureQuality,
       })
-      setModelPreviewMode(devSettings.tripoAnimationMode === 'static' ? 'apose' : 'animated')
-
-      setTripoJob({
-        taskId: result.taskId,
-        status: result.status,
-        progress: 0,
-        error: '',
-        outputs: null,
-        animationMode: devSettings.tripoAnimationMode,
+      setModelPreviewMode('apose')
+      applyTripoTaskStart(result, {
+        animationMode: 'static',
+        fallbackTaskType: 'multiview_to_model',
       })
-
-      if (currentRunId) {
-        setHistory((currentHistory) =>
-          updateHistoryEntry(currentHistory, currentRunId, {
-            tripoTaskId: result.taskId,
-            tripoStatus: result.status,
-          }),
-        )
-      }
     } catch (requestError) {
       setError(requestError.message)
     } finally {
       setIsCreatingFrontBackModel(false)
+    }
+  }
+
+  const handleAnimateRig = async () => {
+    if (!tripoJob.taskId) {
+      setError('Create a mesh task before starting rigging.')
+      return
+    }
+
+    setError('')
+    setIsCreatingRigTask(true)
+
+    try {
+      const result = await createTripoRigTask(tripoJob.taskId)
+      setModelPreviewMode('apose')
+      applyTripoTaskStart(result, {
+        animationMode: 'static',
+        fallbackTaskType: 'animate_rig',
+        fallbackSourceTaskId: tripoJob.taskId,
+      })
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setIsCreatingRigTask(false)
+    }
+  }
+
+  const handleAnimateRetarget = async () => {
+    if (!retargetStartTaskId) {
+      setError('Load a successful rig or animation task before starting retarget.')
+      return
+    }
+
+    setError('')
+    setIsCreatingRetargetTask(true)
+
+    try {
+      const result = await createTripoRetargetTask(retargetStartTaskId, {
+        animationName: String(devSettings.tripoRetargetAnimationName || '').trim(),
+      })
+      setModelPreviewMode('animated')
+      applyTripoTaskStart(result, {
+        animationMode: 'animated',
+        fallbackTaskType: 'animate_retarget',
+        fallbackSourceTaskId:
+          tripoJob.taskType === 'animate_rig' ? tripoJob.taskId : tripoJob.sourceTaskId || '',
+      })
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setIsCreatingRetargetTask(false)
     }
   }
 
@@ -830,6 +1027,34 @@ function App() {
       setError(requestError.message)
     } finally {
       setIsRefreshingTripoJob(false)
+    }
+  }
+
+  const handleLoadExistingTripoTask = async () => {
+    const trimmedTaskId = String(existingTripoTaskIdInput || '').trim()
+
+    if (!trimmedTaskId) {
+      setError('Enter a Tripo task ID to load an existing result.')
+      return
+    }
+
+    setError('')
+    setIsLoadingExistingTripoTask(true)
+
+    try {
+      const nextJob = await refreshTripoJob(trimmedTaskId, 'static')
+      const nextAnimationMode = getAnimationModeForTaskType(nextJob.taskType)
+      setExistingTripoTaskIdInput(trimmedTaskId)
+      setTripoJob({
+        ...EMPTY_JOB,
+        ...nextJob,
+        taskId: nextJob.taskId || trimmedTaskId,
+        animationMode: nextAnimationMode,
+      })
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setIsLoadingExistingTripoTask(false)
     }
   }
 
@@ -1054,6 +1279,18 @@ function App() {
     }
   }
 
+  const handleToggleDefaultSprites = () => {
+    setDefaultSpritesCacheKey(Date.now())
+    setDevSettings((currentValue) => ({
+      ...currentValue,
+      defaultSpritesEnabled: !currentValue.defaultSpritesEnabled,
+    }))
+  }
+
+  const handleRefreshDefaultSprites = () => {
+    setDefaultSpritesCacheKey(Date.now())
+  }
+
   return (
     <div className="page-shell">
       <div className="page-backdrop" aria-hidden="true" />
@@ -1143,13 +1380,19 @@ function App() {
                   multiviewResult?.views?.back?.imageDataUrl,
               )}
               canCreateFrontModel={Boolean(multiviewResult?.views?.front?.imageDataUrl)}
+              canAnimateRig={canAnimateRig}
+              canAnimateRetarget={canAnimateRetarget}
               isCreatingModel={isCreatingModel}
               isCreatingFrontBackModel={isCreatingFrontBackModel}
               isCreatingFrontModel={isCreatingFrontModel}
+              isCreatingRigTask={isCreatingRigTask}
+              isCreatingRetargetTask={isCreatingRetargetTask}
               isRefreshingJob={isRefreshingTripoJob}
               onCreateModel={handleCreateModel}
               onCreateFrontBackModel={handleCreateFrontBackModel}
               onCreateFrontModel={handleCreateFrontModel}
+              onAnimateRig={handleAnimateRig}
+              onAnimateRetarget={handleAnimateRetarget}
               onForcePullResult={handleForcePullResult}
               onDownloadModel={handleDownloadModel}
               onResetView={handleResetView}
@@ -1178,7 +1421,7 @@ function App() {
                 <h2>Sprite</h2>
               </div>
             </div>
-            <SpriteGrid directions={spriteResult?.directions} embedded />
+            <SpriteGrid directions={activeSpriteDirections} embedded />
           </section>
         </section>
       </main>
@@ -1263,6 +1506,62 @@ function App() {
                 <option value="static">Static</option>
               </select>
             </label>
+            <label className="dev-panel__field">
+              <span>Retarget Animation</span>
+              <input
+                type="text"
+                value={devSettings.tripoRetargetAnimationName}
+                placeholder="Leave blank for server default, e.g. preset:idle"
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    tripoRetargetAnimationName: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Mesh Quality</span>
+              <select
+                value={devSettings.tripoMeshQuality}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    tripoMeshQuality: normalizeTripoQuality(
+                      event.target.value,
+                      currentValue.tripoMeshQuality,
+                    ),
+                  }))
+                }
+              >
+                {Object.entries(TRIPO_QUALITY_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="dev-panel__field">
+              <span>Texture Quality</span>
+              <select
+                value={devSettings.tripoTextureQuality}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    tripoTextureQuality: normalizeTripoQuality(
+                      event.target.value,
+                      currentValue.tripoTextureQuality,
+                    ),
+                  }))
+                }
+              >
+                {Object.entries(TRIPO_QUALITY_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="action-row action-row--compact action-row--dev">
               <button
                 type="button"
@@ -1302,6 +1601,21 @@ function App() {
               >
                 {isGeneratingSprite ? 'Generating sprite run...' : 'Generate Sprite Run'}
               </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleToggleDefaultSprites}
+              >
+                {devSettings.defaultSpritesEnabled ? 'Default Sprites: ON' : 'Default Sprites: OFF'}
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={handleRefreshDefaultSprites}
+                disabled={!devSettings.defaultSpritesEnabled}
+              >
+                Refresh Default Sprites
+              </button>
             </div>
             <div className="dev-panel__field">
               <span>Gemini</span>
@@ -1319,7 +1633,15 @@ function App() {
               <div className="dev-panel__status">
                 <strong>Task Controls</strong>
                 <p>{activeModelUrl ? 'Preview ready' : 'Preview unavailable'}</p>
-                <p>Output mode: {devSettings.tripoAnimationMode === 'animated' ? 'Animated' : 'Static'}</p>
+                <p>Current task type: {formatTripoTaskTypeLabel(tripoJob.taskType)}</p>
+                <p>Selected model version: {healthVersions.tripoModelVersion || 'Unknown'}</p>
+                <p>Selected rig version: {healthVersions.tripoRigModelVersion || 'Unknown'}</p>
+                <p>
+                  Retarget animation:{' '}
+                  {String(devSettings.tripoRetargetAnimationName || '').trim() || 'Server default'}
+                </p>
+                <p>Mesh quality: {TRIPO_QUALITY_LABELS[devSettings.tripoMeshQuality]}</p>
+                <p>Texture quality: {TRIPO_QUALITY_LABELS[devSettings.tripoTextureQuality]}</p>
                 <p>Preview pose: {modelPreviewMode === 'apose' ? 'A-pose' : 'Animated'}</p>
                 <p>
                   Preview variant:{' '}
@@ -1350,6 +1672,43 @@ function App() {
                   <option value="apose">A-pose</option>
                 </select>
               </label>
+              <label className="dev-panel__field">
+                <span>Load Existing Tripo Task ID</span>
+                <input
+                  type="text"
+                  value={existingTripoTaskIdInput}
+                  placeholder="Paste image_to_model / multiview_to_model / rig / retarget task id"
+                  onChange={(event) => setExistingTripoTaskIdInput(event.target.value)}
+                />
+              </label>
+              <div className="action-row action-row--compact action-row--dev">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!existingTripoTaskIdInput.trim() || isLoadingExistingTripoTask}
+                  onClick={handleLoadExistingTripoTask}
+                >
+                  {isLoadingExistingTripoTask ? 'Loading Task...' : 'Load Existing Task'}
+                </button>
+              </div>
+              <div className="action-row action-row--compact action-row--dev">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!canAnimateRig || isCreatingRigTask}
+                  onClick={handleAnimateRig}
+                >
+                  {isCreatingRigTask ? 'Submitting Rig...' : 'Animate Rig'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!canAnimateRetarget || isCreatingRetargetTask}
+                  onClick={handleAnimateRetarget}
+                >
+                  {isCreatingRetargetTask ? 'Submitting Retarget...' : 'Animate Retarget'}
+                </button>
+              </div>
               <div className="action-row action-row--compact action-row--dev">
                 <button
                   type="button"

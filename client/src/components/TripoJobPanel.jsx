@@ -5,13 +5,19 @@ export function TripoJobPanel({
   canCreateModel,
   canCreateFrontBackModel,
   canCreateFrontModel,
+  canAnimateRig,
+  canAnimateRetarget,
   isCreatingModel,
   isCreatingFrontBackModel,
   isCreatingFrontModel,
+  isCreatingRigTask,
+  isCreatingRetargetTask,
   isRefreshingJob,
   onCreateModel,
   onCreateFrontBackModel,
   onCreateFrontModel,
+  onAnimateRig,
+  onAnimateRetarget,
   onForcePullResult,
   onDownloadModel,
   onResetView,
@@ -88,6 +94,22 @@ export function TripoJobPanel({
           onClick={onCreateFrontModel}
         >
           {isCreatingFrontModel ? 'Submitting 3D Front...' : '3D Front'}
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={!canAnimateRig || isCreatingRigTask}
+          onClick={onAnimateRig}
+        >
+          {isCreatingRigTask ? 'Submitting Rig...' : 'Animate Rig'}
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={!canAnimateRetarget || isCreatingRetargetTask}
+          onClick={onAnimateRetarget}
+        >
+          {isCreatingRetargetTask ? 'Submitting Retarget...' : 'Animate Retarget'}
         </button>
         {showUtilityActions ? (
           <>

@@ -14,8 +14,10 @@ import { createCharacterRouter } from './routes/character.js'
 import { createTripoRouter } from './routes/tripo.js'
 import { createSpriteRouter } from './routes/sprite.js'
 import { createDevRouter } from './routes/dev.js'
+import { createTaskAuditLogger } from './utils/taskAuditLogger.js'
 
 export const createApp = (config = loadEnv(), services = {}) => {
+  const taskAuditLogger = services.taskAuditLogger || createTaskAuditLogger()
   const geminiClient =
     services.geminiClient ||
     createGeminiClient({ apiKey: config.geminiApiKey })
@@ -24,6 +26,7 @@ export const createApp = (config = loadEnv(), services = {}) => {
     createTripoClient({
       apiKey: config.tripoApiKey,
       baseUrl: config.tripoBaseUrl,
+      auditLogger: taskAuditLogger,
     })
   const pixellabClient =
     services.pixellabClient ||
@@ -51,6 +54,7 @@ export const createApp = (config = loadEnv(), services = {}) => {
     createTripoService({
       tripoClient,
       config,
+      taskAuditLogger,
     })
   const spriteService =
     services.spriteService ||
@@ -68,7 +72,7 @@ export const createApp = (config = loadEnv(), services = {}) => {
   app.use(express.json({ limit: '20mb' }))
   app.use(express.urlencoded({ extended: true }))
 
-  app.use('/api/health', createHealthRouter())
+  app.use('/api/health', createHealthRouter({ config }))
   app.use('/api/character', createCharacterRouter({ portraitService, multiviewService }))
   app.use('/api/tripo', createTripoRouter({ tripoService }))
   app.use('/api/sprites', createSpriteRouter({ spriteService }))

@@ -1,6 +1,7 @@
 import request from 'supertest'
 import sharp from 'sharp'
 import { describe, expect, it, vi } from 'vitest'
+import { createTripoClient } from '../api/tripoClient.js'
 import { loadEnv } from '../config/env.js'
 import { createApp } from '../index.js'
 import { mirrorHorizontally } from '../services/imageTransformService.js'
@@ -23,6 +24,7 @@ const TEST_CONFIG = {
   tripoModelVersion: 'v3.1-20260211',
   tripoTexture: true,
   tripoPbr: true,
+  tripoMeshQuality: 'standard',
   tripoTextureQuality: 'standard',
   tripoTextureAlignment: 'original_image',
   tripoOrientation: 'default',
@@ -47,6 +49,8 @@ const noopTripoService = {
   createTaskFromViews: vi.fn(),
   createTaskFromFrontBackViews: vi.fn(),
   createTaskFromFrontView: vi.fn(),
+  createRigTask: vi.fn(),
+  createRetargetTask: vi.fn(),
   getTaskSummary: vi.fn(),
   getModelAsset: vi.fn(),
 }
@@ -109,6 +113,112 @@ describe('error normalization', () => {
     expect(message).toBe(
       'Gemini quota exceeded for image generation. Check billing or quota for your Google project, or retry in about 4 seconds.',
     )
+  })
+})
+
+describe('tripoClient', () => {
+  it('logs successful task submissions with exact request payload', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: { task_id: 'rig-task-123' } }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }),
+    )
+    const originalFetch = global.fetch
+    global.fetch = fetchMock
+
+    try {
+      const auditLogger = {
+        logSubmission: vi.fn().mockResolvedValue(undefined),
+        logFailure: vi.fn().mockResolvedValue(undefined),
+      }
+      const tripoClient = createTripoClient({
+        apiKey: 'tsk_test',
+        baseUrl: 'https://api.tripo3d.ai/v2/openapi',
+        auditLogger,
+      })
+
+      await tripoClient.createRigTask({
+        originalModelTaskId: 'mesh-task-1',
+        outFormat: 'glb',
+        rigType: 'biped',
+        spec: 'tripo',
+        modelVersion: 'v1.0-20240301',
+      })
+
+      expect(auditLogger.logSubmission).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'animate_rig',
+          path: '/task',
+          baseUrl: 'https://api.tripo3d.ai/v2/openapi',
+          taskId: 'rig-task-123',
+          requestBody: {
+            type: 'animate_rig',
+            original_model_task_id: 'mesh-task-1',
+            out_format: 'glb',
+            rig_type: 'biped',
+            spec: 'tripo',
+            model_version: 'v1.0-20240301',
+          },
+        }),
+      )
+      expect(auditLogger.logFailure).not.toHaveBeenCalled()
+    } finally {
+      global.fetch = originalFetch
+    }
+  })
+
+  it('logs failed task submissions with exact request payload', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ message: 'One or more of your parameter is invalid' }), {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }),
+    )
+    const originalFetch = global.fetch
+    global.fetch = fetchMock
+
+    try {
+      const auditLogger = {
+        logSubmission: vi.fn().mockResolvedValue(undefined),
+        logFailure: vi.fn().mockResolvedValue(undefined),
+      }
+      const tripoClient = createTripoClient({
+        apiKey: 'tsk_test',
+        baseUrl: 'https://api.tripo3d.ai/v2/openapi',
+        auditLogger,
+      })
+
+      await expect(
+        tripoClient.createAnimationTask({
+          originalModelTaskId: 'rig-task-1',
+          animation: 'preset:idle',
+          taskType: 'animate_retarget',
+          animateInPlace: false,
+        }),
+      ).rejects.toThrow(/parameter is invalid/i)
+
+      expect(auditLogger.logFailure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'animate_retarget',
+          path: '/task',
+          baseUrl: 'https://api.tripo3d.ai/v2/openapi',
+          requestBody: {
+            type: 'animate_retarget',
+            original_model_task_id: 'rig-task-1',
+            animation: 'preset:idle',
+            animate_in_place: false,
+          },
+        }),
+      )
+      expect(auditLogger.logSubmission).not.toHaveBeenCalled()
+    } finally {
+      global.fetch = originalFetch
+    }
   })
 })
 
@@ -541,6 +651,116 @@ describe('tripoService', () => {
     )
   })
 
+  it('sends geometry_quality when model_version supports it', async () => {
+    const makeDataUrl = async (color) => {
+      const buffer = await sharp({
+        create: {
+          width: 1,
+          height: 1,
+          channels: 3,
+          background: color,
+        },
+      })
+        .png()
+        .toBuffer()
+
+      return `data:image/png;base64,${buffer.toString('base64')}`
+    }
+
+    const uploadImageBuffer = vi
+      .fn()
+      .mockResolvedValueOnce({ file_token: 'front-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'left-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'back-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'right-token', type: 'jpg' })
+    const createMultiviewTask = vi.fn().mockResolvedValue('task-geometry-quality-1')
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer,
+        createMultiviewTask,
+        createImageTask: vi.fn(),
+        getTask: vi.fn(),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoModelVersion: 'v3.1-20260211',
+      },
+    })
+
+    await tripoService.createTaskFromViews(
+      {
+        front: await makeDataUrl({ r: 255, g: 0, b: 0 }),
+        back: await makeDataUrl({ r: 0, g: 255, b: 0 }),
+        left: await makeDataUrl({ r: 0, g: 0, b: 255 }),
+        right: await makeDataUrl({ r: 255, g: 255, b: 0 }),
+      },
+      {
+        meshQuality: 'detailed',
+        textureQuality: 'detailed',
+      },
+    )
+
+    const requestPayload = createMultiviewTask.mock.calls[0][0]
+    expect(requestPayload.options.geometry_quality).toBe('detailed')
+    expect(requestPayload.options.texture_quality).toBe('detailed')
+  })
+
+  it('omits geometry_quality when model_version is below v3.0-20250812', async () => {
+    const makeDataUrl = async (color) => {
+      const buffer = await sharp({
+        create: {
+          width: 1,
+          height: 1,
+          channels: 3,
+          background: color,
+        },
+      })
+        .png()
+        .toBuffer()
+
+      return `data:image/png;base64,${buffer.toString('base64')}`
+    }
+
+    const uploadImageBuffer = vi
+      .fn()
+      .mockResolvedValueOnce({ file_token: 'front-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'left-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'back-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'right-token', type: 'jpg' })
+    const createMultiviewTask = vi.fn().mockResolvedValue('task-geometry-quality-2')
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer,
+        createMultiviewTask,
+        createImageTask: vi.fn(),
+        getTask: vi.fn(),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoModelVersion: 'v3.0-20250811',
+      },
+    })
+
+    await tripoService.createTaskFromViews(
+      {
+        front: await makeDataUrl({ r: 255, g: 0, b: 0 }),
+        back: await makeDataUrl({ r: 0, g: 255, b: 0 }),
+        left: await makeDataUrl({ r: 0, g: 0, b: 255 }),
+        right: await makeDataUrl({ r: 255, g: 255, b: 0 }),
+      },
+      {
+        meshQuality: 'detailed',
+        textureQuality: 'detailed',
+      },
+    )
+
+    const requestPayload = createMultiviewTask.mock.calls[0][0]
+    expect(requestPayload.options.geometry_quality).toBeUndefined()
+    expect(requestPayload.options.texture_quality).toBe('detailed')
+  })
+
   it('uploads front+back views into front/back multiview slots', async () => {
     const makeDataUrl = async (color) => {
       const buffer = await sharp({
@@ -589,10 +809,13 @@ describe('tripoService', () => {
         ],
       }),
     )
-    expect(result).toEqual({
-      taskId: 'task-front-back-123',
-      status: 'queued',
-    })
+    expect(result).toEqual(
+      expect.objectContaining({
+        taskId: 'task-front-back-123',
+        taskType: 'multiview_to_model',
+        status: 'queued',
+      }),
+    )
   })
 
   it('creates image-to-model tasks from a single front image', async () => {
@@ -633,10 +856,13 @@ describe('tripoService', () => {
         },
       }),
     )
-    expect(result).toEqual({
-      taskId: 'task-front-123',
-      status: 'queued',
-    })
+    expect(result).toEqual(
+      expect.objectContaining({
+        taskId: 'task-front-123',
+        taskType: 'image_to_model',
+        status: 'queued',
+      }),
+    )
   })
 
   it('maps output fallback order for task summaries', async () => {
@@ -841,7 +1067,7 @@ describe('tripoService', () => {
       originalModelTaskId: 'rig-task-idle-1',
       animation: 'idle',
       taskType: 'animate_model',
-      animateInPlace: true,
+      animateInPlace: null,
     })
     expect(summary.taskId).toBe('anim-task-777')
     expect(summary.outputs).toEqual(
@@ -855,6 +1081,135 @@ describe('tripoService', () => {
       expect.objectContaining({
         animated_model: '/api/tripo/tasks/anim-task-777/model?variant=animated_model',
         rigged_model: '/api/tripo/tasks/anim-task-777/model?variant=rigged_model',
+      }),
+    )
+  })
+
+  it('uses the requested animation name for explicit retarget tasks', async () => {
+    const createAnimationTask = vi.fn().mockResolvedValue('anim-task-walk-1')
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer: vi.fn(),
+        createMultiviewTask: vi.fn(),
+        createImageTask: vi.fn(),
+        createRigTask: vi.fn(),
+        createAnimationTask,
+        getTask: vi
+          .fn()
+          .mockResolvedValueOnce({
+            task_id: 'rig-task-walk-1',
+            type: 'animate_rig',
+            status: 'success',
+            progress: 100,
+            output: {
+              rigged_model: 'https://example.com/rigged-walk.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'anim-task-walk-1',
+            type: 'animate_retarget',
+            status: 'queued',
+            progress: 0,
+            output: {},
+          }),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoIdleAnimationTaskType: 'animate_retarget',
+        tripoIdleAnimationName: 'preset:idle',
+        tripoIdleAnimationInPlace: false,
+      },
+    })
+
+    const result = await tripoService.createRetargetTask('rig-task-walk-1', {
+      animationName: 'preset:walk',
+    })
+
+    expect(createAnimationTask).toHaveBeenCalledWith({
+      originalModelTaskId: 'rig-task-walk-1',
+      animation: 'preset:walk',
+      taskType: 'animate_retarget',
+      animateInPlace: false,
+    })
+    expect(result).toEqual(
+      expect.objectContaining({
+        taskId: 'anim-task-walk-1',
+        taskType: 'animate_retarget',
+        sourceTaskId: 'rig-task-walk-1',
+      }),
+    )
+  })
+
+  it('resolves missing rig source for animation tasks from the audit log fallback', async () => {
+    const createAnimationTask = vi.fn().mockResolvedValue('anim-task-fallback-2')
+    const taskAuditLogger = {
+      findSubmissionByTaskId: vi.fn().mockResolvedValue({
+        taskId: 'anim-task-fallback-1',
+        requestBody: {
+          original_model_task_id: 'rig-task-fallback-1',
+        },
+      }),
+    }
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer: vi.fn(),
+        createMultiviewTask: vi.fn(),
+        createImageTask: vi.fn(),
+        createRigTask: vi.fn(),
+        createAnimationTask,
+        getTask: vi
+          .fn()
+          .mockResolvedValueOnce({
+            task_id: 'anim-task-fallback-1',
+            type: 'animate_retarget',
+            status: 'success',
+            progress: 100,
+            output: {
+              animation_model: 'https://example.com/animated-existing.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'rig-task-fallback-1',
+            type: 'animate_rig',
+            status: 'success',
+            progress: 100,
+            output: {
+              rigged_model: 'https://example.com/rigged-fallback.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'anim-task-fallback-2',
+            type: 'animate_retarget',
+            status: 'queued',
+            progress: 0,
+            output: {},
+          }),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoIdleAnimationTaskType: 'animate_retarget',
+        tripoIdleAnimationName: 'preset:idle',
+      },
+      taskAuditLogger,
+    })
+
+    const result = await tripoService.createRetargetTask('anim-task-fallback-1', {
+      animationName: 'preset:run',
+    })
+
+    expect(taskAuditLogger.findSubmissionByTaskId).toHaveBeenCalledWith('anim-task-fallback-1')
+    expect(createAnimationTask).toHaveBeenCalledWith({
+      originalModelTaskId: 'rig-task-fallback-1',
+      animation: 'preset:run',
+      taskType: 'animate_retarget',
+      animateInPlace: true,
+    })
+    expect(result).toEqual(
+      expect.objectContaining({
+        taskId: 'anim-task-fallback-2',
+        sourceTaskId: 'rig-task-fallback-1',
       }),
     )
   })
@@ -1066,7 +1421,7 @@ describe('tripoService', () => {
       originalModelTaskId: 'rig-task-animated-1',
       animation: 'idle',
       taskType: 'animate_model',
-      animateInPlace: true,
+      animateInPlace: null,
     })
     expect(summary.taskId).toBe('anim-task-animated-1')
     expect(summary.outputs).toEqual(
