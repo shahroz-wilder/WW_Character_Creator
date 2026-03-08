@@ -9,17 +9,12 @@ export function CharacterPromptForm({
   onAccept,
   isGeneratingPortrait,
   isAcceptDisabled = false,
+  embedded = false,
   title = 'Identity Portrait',
   stepLabel = 'Step 01',
 }) {
-  return (
-    <section className="panel-card">
-      <div className="panel-heading-shell">
-        <div className="section-heading">
-          <p className="step-label">{stepLabel}</p>
-          <h2>{title}</h2>
-        </div>
-      </div>
+  const formBody = (
+    <>
       <label className="visually-hidden" htmlFor="character-prompt">
         Character prompt
       </label>
@@ -72,6 +67,22 @@ export function CharacterPromptForm({
           </span>
         </button>
       </div>
+    </>
+  )
+
+  if (embedded) {
+    return <div className="character-prompt character-prompt--embedded">{formBody}</div>
+  }
+
+  return (
+    <section className="panel-card">
+      <div className="panel-heading-shell">
+        <div className="section-heading">
+          <p className="step-label">{stepLabel}</p>
+          <h2>{title}</h2>
+        </div>
+      </div>
+      {formBody}
     </section>
   )
 }

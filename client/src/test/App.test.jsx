@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
@@ -81,6 +81,12 @@ const openDevPanel = async (user) => {
   await user.click(screen.getByRole('button', { name: 'DEV' }))
 }
 
+const getStep03ModelPanel = () => screen.getByLabelText('Step 03 3D Model Panel')
+const getStep03GenerateButton = () =>
+  within(getStep03ModelPanel()).getByRole('button', { name: 'Generate 3D' })
+const getStep03AcceptButton = () =>
+  within(getStep03ModelPanel()).getByRole('button', { name: 'Accept' })
+
 const generatePortraitThenMultiview = async (user) => {
   await user.type(screen.getByLabelText('Character prompt'), 'pilot')
   await user.click(screen.getByRole('button', { name: 'Generate PFP' }))
@@ -106,8 +112,8 @@ describe('App', () => {
     const user = userEvent.setup()
     await openDevPanel(user)
 
-    expect(screen.getByRole('button', { name: 'Generate 3D' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Accept' })).toBeDisabled()
+    expect(getStep03GenerateButton()).toBeDisabled()
+    expect(getStep03AcceptButton()).toBeDisabled()
     expect(screen.getByRole('button', { name: '3D Front' })).toBeDisabled()
   })
 
@@ -305,7 +311,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     await generatePortraitThenMultiview(user)
-    await user.click(screen.getByRole('button', { name: 'Generate 3D' }))
+    await user.click(getStep03GenerateButton())
 
     await waitFor(() =>
       expect(createTripoTask).toHaveBeenCalledWith({
@@ -338,7 +344,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     await generatePortraitThenMultiview(user)
-    await user.click(screen.getByRole('button', { name: 'Accept' }))
+    await user.click(getStep03AcceptButton())
 
     await waitFor(() =>
       expect(createTripoFrontBackTask).toHaveBeenCalledWith({
@@ -402,7 +408,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     await generatePortraitThenMultiview(user)
-    await user.click(screen.getByRole('button', { name: 'Generate 3D' }))
+    await user.click(getStep03GenerateButton())
     await user.click(screen.getAllByRole('button', { name: 'Animate Rig' })[0])
     await waitFor(() => expect(createTripoRigTask).toHaveBeenCalledWith('task-base-1'))
     await user.type(screen.getByRole('textbox', { name: 'Retarget Animation' }), 'preset:walk')
@@ -545,8 +551,8 @@ describe('App', () => {
       }),
     )
 
-    expect(screen.getByRole('button', { name: 'Generate 3D' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Accept' })).toBeDisabled()
+    expect(getStep03GenerateButton()).toBeDisabled()
+    expect(getStep03AcceptButton()).toBeDisabled()
     expect(screen.getByRole('button', { name: '3D Front' })).toBeEnabled()
   })
 })

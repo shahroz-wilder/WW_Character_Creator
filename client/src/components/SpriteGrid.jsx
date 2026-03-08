@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
 const SPRITE_VIEW_SLOTS = [
-  { key: 'view_360', label: '360', aliases: ['view_360', '360', 'turn360', 'orbit'] },
   { key: 'front', label: 'Front', aliases: ['front'] },
   { key: 'front_right', label: 'FrontRight', aliases: ['front_right', 'frontRight', 'frontright'] },
   { key: 'right', label: 'Right', aliases: ['right'] },

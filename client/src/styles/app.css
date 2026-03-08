@@ -154,44 +154,38 @@
 .workspace-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(280px, 0.88fr) minmax(0, 2.3fr) minmax(280px, 1fr);
-  grid-template-areas:
-    'portrait viewer turnaround'
-    'prompt viewer multiview';
-  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(280px, 0.88fr) minmax(0, 2.4fr) minmax(280px, 0.94fr);
+  grid-template-areas: 'portrait stage sprite';
+  grid-template-rows: minmax(0, 1fr);
   height: clamp(760px, calc(100vh - 122px), 996px);
   align-items: stretch;
-}
-
-.workspace-slot--prompt {
-  grid-area: prompt;
 }
 
 .workspace-slot--portrait {
   grid-area: portrait;
 }
 
-.workspace-slot--turnaround {
-  grid-area: turnaround;
+.workspace-slot--sprite {
+  grid-area: sprite;
 }
 
-.workspace-slot--multiview {
-  grid-area: multiview;
-}
-
-.workspace-viewer {
-  grid-area: viewer;
+.panel-card.workspace-stage {
+  grid-area: stage;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
   align-self: stretch;
-  height: 100%;
 }
 
 .workspace-slot {
   align-self: stretch;
+  min-height: 0;
 }
 
 .workspace-slot .panel-card,
 .workspace-slot.panel-card,
-.workspace-viewer,
+.workspace-stage,
 .workspace-shell > .panel-card {
   height: 100%;
   padding: 16px;
@@ -203,13 +197,6 @@
   min-height: 0;
 }
 
-.workspace-viewer {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: 10px;
-}
-
-.workspace-viewer__heading,
 .panel-heading-shell {
   display: flex;
   align-items: start;
@@ -219,6 +206,102 @@
   flex: 0 0 64px;
   margin: 0;
   padding: 0;
+}
+
+.workspace-portrait {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.workspace-portrait > .portrait-card {
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.workspace-portrait .portrait-card img,
+.workspace-portrait .empty-state--portrait {
+  height: clamp(240px, 33vh, 420px);
+}
+
+.workspace-portrait .portrait-card img {
+  object-fit: cover;
+  object-position: center top;
+  padding: 12px;
+}
+
+.workspace-portrait__prompt {
+  min-height: 0;
+  display: flex;
+  height: 100%;
+}
+
+.workspace-portrait__prompt .character-prompt--embedded {
+  height: 100%;
+  width: 100%;
+}
+
+.workspace-stage__multiview,
+.workspace-stage__model,
+.workspace-sprite {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 10px;
+  min-height: 0;
+}
+
+.workspace-stage__multiview {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.workspace-stage__multiview-body,
+.workspace-sprite__body {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.workspace-stage__multiview-body {
+  overflow-y: hidden;
+  width: fit-content;
+}
+
+.workspace-sprite__body {
+  overflow-y: hidden;
+}
+
+.workspace-sprite__body .sprite-grid {
+  width: 100%;
+  height: 100%;
+  gap: 8px;
+  align-content: stretch;
+}
+
+.workspace-stage__multiview .multiview-grid {
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(4, minmax(0, 1fr));
+  height: 100%;
+  gap: 8px;
+  align-content: stretch;
+  justify-items: start;
+}
+
+.workspace-stage__multiview .view-card {
+  min-height: 0;
+  height: 100%;
+  width: auto;
+  aspect-ratio: 1 / 1;
+  justify-self: start;
+}
+
+.workspace-stage__multiview .view-card img {
+  object-fit: contain;
+}
+
+.workspace-stage__model .workspace-viewer__viewport {
+  min-height: 0;
+  height: 100%;
 }
 
 .panel-fill {
@@ -485,7 +568,7 @@
   padding: 14px 16px 78px;
   border: 1px solid var(--panel-line);
   border-radius: 26px;
-  resize: vertical;
+  resize: none;
   background:
     linear-gradient(40deg, rgba(32, 32, 36, 0.75), rgba(15, 15, 18, 0.95));
   color: rgba(248, 250, 252, 0.9);
@@ -568,8 +651,9 @@
 }
 
 .workspace-slot--portrait .portrait-card {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
+  width: 100%;
 }
 
 .portrait-card--square {
@@ -592,7 +676,6 @@
 }
 
 .workspace-slot--portrait .portrait-card img {
-  height: 100%;
   min-height: 0;
 }
 
@@ -848,12 +931,20 @@
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
-.workspace-slot--prompt .prompt-textarea {
+.character-prompt--embedded {
+  width: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.character-prompt--embedded .prompt-textarea {
   min-height: 0;
   height: 100%;
 }
 
-.workspace-slot--prompt .prompt-textarea-shell {
+.character-prompt--embedded .prompt-textarea-shell {
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -870,8 +961,8 @@
 .sprite-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(4, minmax(0, 1fr));
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -1165,18 +1256,17 @@
 
 @media (max-width: 1320px) {
   .workspace-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
     grid-template-areas:
-      'viewer viewer'
-      'portrait turnaround'
-      'prompt multiview';
-    grid-template-rows: minmax(420px, 1.25fr) repeat(2, minmax(0, 1fr));
+      'portrait'
+      'stage'
+      'sprite';
+    grid-template-rows: auto minmax(560px, 1fr) auto;
     height: auto;
   }
 
-  .workspace-viewer__heading {
-    align-items: start;
-    flex-direction: column;
+  .panel-card.workspace-stage {
+    min-height: 620px;
   }
 }
 
@@ -1198,18 +1288,22 @@
     grid-template-columns: 1fr;
     grid-template-areas:
       'portrait'
-      'prompt'
-      'viewer'
-      'turnaround'
-      'multiview';
+      'stage'
+      'sprite';
     grid-template-rows: none;
   }
 
   .workspace-slot .panel-card,
   .workspace-slot.panel-card,
-  .workspace-viewer,
+  .workspace-stage,
   .workspace-shell > .panel-card {
     padding: 16px;
+  }
+
+  .panel-card.workspace-stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 0.9fr) minmax(0, 1.15fr);
+    min-height: auto;
   }
 
   .prompt-textarea {
@@ -1226,9 +1320,21 @@
     grid-template-rows: none;
   }
 
+  .workspace-stage__multiview .multiview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-stage__multiview .view-card {
+    width: 100%;
+    height: 100%;
+    aspect-ratio: auto;
+    justify-self: stretch;
+  }
+
   .sprite-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-template-rows: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(4, minmax(0, 1fr));
   }
 
   .job-panel__header,

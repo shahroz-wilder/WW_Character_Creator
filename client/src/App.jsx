@@ -1458,62 +1458,154 @@ function App() {
           </div>
         </header>
 
-        <section className="workspace-grid workspace-grid--skeleton">
-          <div className="workspace-slot workspace-slot--prompt">
-            <CharacterPromptForm
-              prompt={prompt}
-              onPromptChange={setPrompt}
-              referenceImage={referenceImage}
-              onReferenceImageChange={setReferenceImage}
-              onGeneratePortrait={handleGeneratePortrait}
-              onAccept={handleAcceptPortrait}
-              isGeneratingPortrait={isGeneratingPortrait}
-              isAcceptDisabled={!canAcceptPortrait}
-              title="Prompt"
-              stepLabel="Step 01"
-            />
-          </div>
-
-          <section className="panel-card workspace-slot workspace-slot--portrait">
+        <section className="workspace-grid workspace-grid--screenshot">
+          <section
+            className="panel-card workspace-slot workspace-slot--portrait workspace-portrait"
+            aria-label="Step 01 Portrait Panel"
+          >
             <div className="panel-heading-shell">
               <div className="section-heading">
-                <p className="step-label">Step 02</p>
+                <p className="step-label">Step 01</p>
                 <h2>Portrait</h2>
               </div>
             </div>
-            <PortraitReviewCard portraitResult={portraitResult} embedded square />
+            <PortraitReviewCard portraitResult={portraitResult} embedded />
+            <div className="workspace-portrait__prompt">
+              <CharacterPromptForm
+                embedded
+                prompt={prompt}
+                onPromptChange={setPrompt}
+                referenceImage={referenceImage}
+                onReferenceImageChange={setReferenceImage}
+                onGeneratePortrait={handleGeneratePortrait}
+                onAccept={handleAcceptPortrait}
+                isGeneratingPortrait={isGeneratingPortrait}
+                isAcceptDisabled={!canAcceptPortrait}
+              />
+            </div>
           </section>
 
-          <section className="workspace-viewer">
+          <section className="panel-card workspace-stage" aria-label="Center Stage Panel">
+            <section className="workspace-stage__multiview" aria-label="Step 02 Multiview Panel">
+              <div className="panel-heading-shell">
+                <div className="section-heading">
+                  <p className="step-label">Step 02</p>
+                  <h2>Multiview</h2>
+                </div>
+              </div>
+              <div className="workspace-stage__multiview-body">
+                <MultiviewGrid
+                  views={multiviewResult?.views}
+                  mode={multiviewResult?.mode || 'full'}
+                  embedded
+                />
+              </div>
+              <div className="action-row action-row--compact">
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={!canCreateModel || isCreatingModel}
+                  onClick={handleCreateModel}
+                >
+                  {isCreatingModel ? 'Generating 2D...' : 'Generate 2D'}
+                </button>
+                <button
+                  type="button"
+                  className="accept-button accept-button--icon-only"
+                  disabled={!canCreateFrontBackModel || isCreatingFrontBackModel}
+                  onClick={handleCreateFrontBackModel}
+                  aria-label={isCreatingFrontBackModel ? 'Accepting Multiview' : 'Accept Multiview'}
+                >
+                  <span className="accept-button__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path
+                        d="M6.5 12.5 10.5 16.5 18 8.8"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                </button>
+              </div>
+            </section>
+
+            <section className="workspace-stage__model" aria-label="Step 03 3D Model Panel">
+              <div className="panel-heading-shell">
+                <div className="section-heading">
+                  <p className="step-label">Step 03</p>
+                  <h2>3D Model</h2>
+                </div>
+              </div>
+              <div className="workspace-viewer__viewport">
+                {activeModelUrl ? (
+                  <Suspense
+                    fallback={
+                      <div className="viewer-placeholder">
+                        <p>Loading viewer...</p>
+                      </div>
+                    }
+                  >
+                    <ModelViewer
+                      modelUrl={activeModelUrl}
+                      resetSignal={viewerResetSignal}
+                      onCaptureApiReady={handleViewerCaptureApiReady}
+                    />
+                  </Suspense>
+                ) : (
+                  <div className="viewer-placeholder">
+                    <p>The textured GLB appears here after Tripo completes.</p>
+                  </div>
+                )}
+              </div>
+              <div className="action-row action-row--compact">
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={!canCreateModel || isCreatingModel}
+                  onClick={handleCreateModel}
+                >
+                  {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
+                </button>
+                <button
+                  type="button"
+                  className="accept-button accept-button--icon-only"
+                  disabled={!canCreateFrontBackModel || isCreatingFrontBackModel}
+                  onClick={handleCreateFrontBackModel}
+                  aria-label={isCreatingFrontBackModel ? 'Accepting' : 'Accept'}
+                >
+                  <span className="accept-button__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path
+                        d="M6.5 12.5 10.5 16.5 18 8.8"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                </button>
+              </div>
+            </section>
+          </section>
+
+          <section
+            className="panel-card workspace-slot workspace-slot--sprite workspace-sprite"
+            aria-label="Step 04 Sprite Panel"
+          >
             <div className="panel-heading-shell">
               <div className="section-heading">
-                <p className="step-label">Step 05</p>
-                <h2>3D Model</h2>
+                <p className="step-label">Step 04</p>
+                <h2>Sprite</h2>
               </div>
             </div>
-
-            <div className="workspace-viewer__viewport">
-              {activeModelUrl ? (
-                <Suspense
-                  fallback={
-                    <div className="viewer-placeholder">
-                      <p>Loading viewer...</p>
-                    </div>
-                  }
-                >
-                  <ModelViewer
-                    modelUrl={activeModelUrl}
-                    resetSignal={viewerResetSignal}
-                    onCaptureApiReady={handleViewerCaptureApiReady}
-                  />
-                </Suspense>
-              ) : (
-                <div className="viewer-placeholder">
-                  <p>The textured GLB appears here after Tripo completes.</p>
-                </div>
-              )}
+            <div className="workspace-sprite__body">
+              <SpriteGrid directions={activeSpriteDirections} embedded />
             </div>
-
             <div className="action-row action-row--compact">
               <button
                 type="button"
@@ -1521,14 +1613,14 @@ function App() {
                 disabled={!canCreateModel || isCreatingModel}
                 onClick={handleCreateModel}
               >
-                {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
+                {isCreatingModel ? 'Generating 2.5D...' : 'Generate 2.5D'}
               </button>
               <button
                 type="button"
                 className="accept-button accept-button--icon-only"
                 disabled={!canCreateFrontBackModel || isCreatingFrontBackModel}
                 onClick={handleCreateFrontBackModel}
-                aria-label={isCreatingFrontBackModel ? 'Accepting' : 'Accept'}
+                aria-label={isCreatingFrontBackModel ? 'Accepting Sprite' : 'Accept Sprite'}
               >
                 <span className="accept-button__icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -1544,31 +1636,6 @@ function App() {
                 </span>
               </button>
             </div>
-
-          </section>
-
-          <section className="panel-card workspace-slot workspace-slot--turnaround">
-            <div className="panel-heading-shell">
-              <div className="section-heading">
-                <p className="step-label">Step 03</p>
-                <h2>Multiview</h2>
-              </div>
-            </div>
-            <MultiviewGrid
-              views={multiviewResult?.views}
-              mode={multiviewResult?.mode || 'full'}
-              embedded
-            />
-          </section>
-
-          <section className="panel-card workspace-slot workspace-slot--multiview">
-            <div className="panel-heading-shell">
-              <div className="section-heading">
-                <p className="step-label">Step 04</p>
-                <h2>Sprite</h2>
-              </div>
-            </div>
-            <SpriteGrid directions={activeSpriteDirections} embedded />
           </section>
         </section>
       </main>
