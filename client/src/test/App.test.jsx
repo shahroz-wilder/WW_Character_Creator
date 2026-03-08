@@ -83,12 +83,13 @@ const openDevPanel = async (user) => {
 
 const generatePortraitThenMultiview = async (user) => {
   await user.type(screen.getByLabelText('Character prompt'), 'pilot')
-  await user.click(screen.getByRole('button', { name: 'Generate Portrait' }))
+  await user.click(screen.getByRole('button', { name: 'Generate PFP' }))
   await waitFor(() => expect(generatePortrait).toHaveBeenCalledTimes(1))
+  expect(generateMultiview).not.toHaveBeenCalled()
+  await user.click(screen.getByRole('button', { name: 'Accept Portrait' }))
+  await waitFor(() => expect(generateMultiview).toHaveBeenCalledTimes(1))
 
   await openDevPanel(user)
-  await user.click(screen.getByRole('button', { name: 'Generate Multiview' }))
-  await waitFor(() => expect(generateMultiview).toHaveBeenCalledTimes(1))
 }
 
 describe('App', () => {
@@ -100,11 +101,13 @@ describe('App', () => {
     window.localStorage.clear()
   })
 
-  it('keeps Create 3D Model disabled until turnaround exists', () => {
+  it('keeps Create 3D Model disabled until turnaround exists', async () => {
     render(<App />)
+    const user = userEvent.setup()
+    await openDevPanel(user)
 
-    expect(screen.getByRole('button', { name: '3D Multiview' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '3D FrontBack' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Generate 3D' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Accept' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '3D Front' })).toBeDisabled()
   })
 
@@ -126,6 +129,27 @@ describe('App', () => {
 
     expect(screen.getByRole('button', { name: 'Generate Sprite Run' })).toBeDisabled()
     expect(screen.getByRole('combobox', { name: 'Sprite Size' })).toHaveValue('64')
+  })
+
+  it('starts multiview only after clicking prompt Accept', async () => {
+    generatePortrait.mockResolvedValue({
+      imageDataUrl: makeDataUrl('portrait'),
+      promptUsed: 'pilot',
+      inputMode: 'prompt',
+      normalizedReferenceImageDataUrl: null,
+    })
+    generateMultiview.mockResolvedValue(makeFullMultiviewResult())
+
+    render(<App />)
+    const user = userEvent.setup()
+
+    await user.type(screen.getByLabelText('Character prompt'), 'pilot')
+    await user.click(screen.getByRole('button', { name: 'Generate PFP' }))
+    await waitFor(() => expect(generatePortrait).toHaveBeenCalledTimes(1))
+    expect(generateMultiview).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Accept Portrait' }))
+    await waitFor(() => expect(generateMultiview).toHaveBeenCalledTimes(1))
   })
 
   it('generates sprite run and renders four animated direction tiles', async () => {
@@ -281,7 +305,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     await generatePortraitThenMultiview(user)
-    await user.click(screen.getByRole('button', { name: '3D Multiview' }))
+    await user.click(screen.getByRole('button', { name: 'Generate 3D' }))
 
     await waitFor(() =>
       expect(createTripoTask).toHaveBeenCalledWith({
@@ -314,7 +338,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     await generatePortraitThenMultiview(user)
-    await user.click(screen.getByRole('button', { name: '3D FrontBack' }))
+    await user.click(screen.getByRole('button', { name: 'Accept' }))
 
     await waitFor(() =>
       expect(createTripoFrontBackTask).toHaveBeenCalledWith({
@@ -378,7 +402,7 @@ describe('App', () => {
     const user = userEvent.setup()
 
     await generatePortraitThenMultiview(user)
-    await user.click(screen.getByRole('button', { name: '3D Multiview' }))
+    await user.click(screen.getByRole('button', { name: 'Generate 3D' }))
     await user.click(screen.getAllByRole('button', { name: 'Animate Rig' })[0])
     await waitFor(() => expect(createTripoRigTask).toHaveBeenCalledWith('task-base-1'))
     await user.type(screen.getByRole('textbox', { name: 'Retarget Animation' }), 'preset:walk')
@@ -506,15 +530,23 @@ describe('App', () => {
     const user = userEvent.setup()
 
     await user.type(screen.getByLabelText('Character prompt'), 'pilot')
-    await user.click(screen.getByRole('button', { name: 'Generate Portrait' }))
+    await user.click(screen.getByRole('button', { name: 'Generate PFP' }))
     await waitFor(() => expect(generatePortrait).toHaveBeenCalledTimes(1))
+    expect(generateMultiview).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Accept Portrait' }))
+    await waitFor(() => expect(generateMultiview).toHaveBeenCalledTimes(1))
 
     await openDevPanel(user)
     await user.click(screen.getByRole('button', { name: 'Generate only front view' }))
-    await waitFor(() => expect(generateMultiview).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(generateMultiview).toHaveBeenCalledTimes(2))
+    expect(generateMultiview).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mode: 'front-only',
+      }),
+    )
 
-    expect(screen.getByRole('button', { name: '3D Multiview' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '3D FrontBack' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Generate 3D' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Accept' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '3D Front' })).toBeEnabled()
   })
 })

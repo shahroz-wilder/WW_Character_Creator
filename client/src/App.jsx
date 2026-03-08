@@ -20,11 +20,9 @@ import { MultiviewGrid } from './components/MultiviewGrid'
 import { MultiviewPromptEditor } from './components/MultiviewPromptEditor'
 import { PortraitReviewCard } from './components/PortraitReviewCard'
 import { SpriteGrid } from './components/SpriteGrid'
-import { TripoJobPanel } from './components/TripoJobPanel'
 import { downloadBlob, downloadDataUrl, downloadFromUrl } from './lib/download'
 import { createHistoryEntry, createRunId, updateHistoryEntry } from './lib/historyStore'
 import {
-  clearPersistedSession,
   loadPersistedSession,
   loadPersistedRichSession,
   savePersistedSession,
@@ -496,6 +494,12 @@ function App() {
       : ['animate_retarget', 'animate_model'].includes(tripoJob.taskType)
         ? tripoJob.taskId
         : ''
+  const canCreateModel = hasCompleteTurnaround(multiviewResult?.views)
+  const canCreateFrontBackModel = Boolean(
+    multiviewResult?.views?.front?.imageDataUrl && multiviewResult?.views?.back?.imageDataUrl,
+  )
+  const canCreateFrontModel = Boolean(multiviewResult?.views?.front?.imageDataUrl)
+  const canAcceptPortrait = Boolean(portraitResult?.imageDataUrl && turnaroundGenerationMode === '')
   const canAnimateRig = Boolean(
     tripoJob.taskId &&
       tripoJob.status === 'success' &&
@@ -790,6 +794,47 @@ function App() {
     }
   }, [currentRunId, devSettings.tripoAnimationMode, tripoJob.animationMode, tripoJob.taskId, tripoJob.status])
 
+  const runMultiviewGeneration = async ({
+    mode = 'full',
+    portraitSource = portraitResult,
+    runIdForHistory = currentRunId,
+  } = {}) => {
+    if (!portraitSource?.imageDataUrl) {
+      setError('Generate a portrait first to establish the character identity.')
+      return null
+    }
+
+    setError('')
+    setTurnaroundGenerationMode(mode)
+    setTripoJob(EMPTY_JOB)
+    setSpriteResult(null)
+
+    try {
+      const result = await generateMultiview({
+        portraitImageDataUrl: portraitSource.imageDataUrl,
+        originalReferenceImageDataUrl: portraitSource.originalReferenceImageDataUrl || null,
+        characterPrompt: prompt,
+        multiviewPrompt,
+        mode,
+      })
+
+      setMultiviewResult(result)
+      if (runIdForHistory) {
+        setHistory((currentHistory) =>
+          updateHistoryEntry(currentHistory, runIdForHistory, {
+            multiview: result.views,
+          }),
+        )
+      }
+      return result
+    } catch (requestError) {
+      setError(requestError.message)
+      return null
+    } finally {
+      setTurnaroundGenerationMode('')
+    }
+  }
+
   const handleGeneratePortrait = async () => {
     if (!prompt.trim() && !referenceImage?.file) {
       setError('Add a prompt, a reference image, or both before generating a portrait.')
@@ -832,44 +877,27 @@ function App() {
       ])
     } catch (requestError) {
       setError(requestError.message)
-    } finally {
       setIsGeneratingPortrait(false)
-    }
-  }
-
-  const handleGenerateTurnaround = async (mode = 'full') => {
-    if (!portraitResult?.imageDataUrl) {
-      setError('Generate a portrait first to establish the character identity.')
       return
     }
 
-    setError('')
-    setTurnaroundGenerationMode(mode)
-    setTripoJob(EMPTY_JOB)
-    setSpriteResult(null)
+    setIsGeneratingPortrait(false)
+  }
 
-    try {
-      const result = await generateMultiview({
-        portraitImageDataUrl: portraitResult.imageDataUrl,
-        originalReferenceImageDataUrl: portraitResult.originalReferenceImageDataUrl || null,
-        characterPrompt: prompt,
-        multiviewPrompt,
-        mode,
-      })
+  const handleAcceptPortrait = async () => {
+    await runMultiviewGeneration({
+      mode: 'full',
+      portraitSource: portraitResult,
+      runIdForHistory: currentRunId,
+    })
+  }
 
-      setMultiviewResult(result)
-      if (currentRunId) {
-        setHistory((currentHistory) =>
-          updateHistoryEntry(currentHistory, currentRunId, {
-            multiview: result.views,
-          }),
-        )
-      }
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setTurnaroundGenerationMode('')
-    }
+  const handleGenerateTurnaround = async (mode = 'full') => {
+    await runMultiviewGeneration({
+      mode,
+      portraitSource: portraitResult,
+      runIdForHistory: currentRunId,
+    })
   }
 
   const handleGenerateSpriteRun = async () => {
@@ -1031,22 +1059,6 @@ function App() {
     } finally {
       setIsCreatingFrontModel(false)
     }
-  }
-
-  const handleReset = () => {
-    setPrompt('')
-    setReferenceImage(null)
-    setPortraitResult(null)
-    setMultiviewPrompt(DEFAULT_MULTIVIEW_PROMPT)
-    setMultiviewResult(null)
-    setSpriteResult(null)
-    setTripoJob(EMPTY_JOB)
-    setCurrentRunId('')
-    setError('')
-    setTurnaroundGenerationMode('')
-    setModelViewPack(null)
-    setModelPreviewMode('animated')
-    clearPersistedSession()
   }
 
   const handleCreateFrontBackModel = async () => {
@@ -1454,8 +1466,9 @@ function App() {
               referenceImage={referenceImage}
               onReferenceImageChange={setReferenceImage}
               onGeneratePortrait={handleGeneratePortrait}
-              onReset={handleReset}
+              onAccept={handleAcceptPortrait}
               isGeneratingPortrait={isGeneratingPortrait}
+              isAcceptDisabled={!canAcceptPortrait}
               title="Prompt"
               stepLabel="Step 01"
             />
@@ -1501,35 +1514,37 @@ function App() {
               )}
             </div>
 
-            <TripoJobPanel
-              embedded
-              showMeta={false}
-              showUtilityActions={false}
-              job={tripoJob}
-              canCreateModel={hasCompleteTurnaround(multiviewResult?.views)}
-              canCreateFrontBackModel={Boolean(
-                multiviewResult?.views?.front?.imageDataUrl &&
-                  multiviewResult?.views?.back?.imageDataUrl,
-              )}
-              canCreateFrontModel={Boolean(multiviewResult?.views?.front?.imageDataUrl)}
-              canAnimateRig={canAnimateRig}
-              canAnimateRetarget={canAnimateRetarget}
-              isCreatingModel={isCreatingModel}
-              isCreatingFrontBackModel={isCreatingFrontBackModel}
-              isCreatingFrontModel={isCreatingFrontModel}
-              isCreatingRigTask={isCreatingRigTask}
-              isCreatingRetargetTask={isCreatingRetargetTask}
-              isRefreshingJob={isRefreshingTripoJob}
-              onCreateModel={handleCreateModel}
-              onCreateFrontBackModel={handleCreateFrontBackModel}
-              onCreateFrontModel={handleCreateFrontModel}
-              onAnimateRig={handleAnimateRig}
-              onAnimateRetarget={handleAnimateRetarget}
-              onForcePullResult={handleForcePullResult}
-              onDownloadModel={handleDownloadModel}
-              onResetView={handleResetView}
-              hasViewer={Boolean(activeModelUrl)}
-            />
+            <div className="action-row action-row--compact">
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!canCreateModel || isCreatingModel}
+                onClick={handleCreateModel}
+              >
+                {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
+              </button>
+              <button
+                type="button"
+                className="accept-button accept-button--icon-only"
+                disabled={!canCreateFrontBackModel || isCreatingFrontBackModel}
+                onClick={handleCreateFrontBackModel}
+                aria-label={isCreatingFrontBackModel ? 'Accepting' : 'Accept'}
+              >
+                <span className="accept-button__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path
+                      d="M6.5 12.5 10.5 16.5 18 8.8"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+              </button>
+            </div>
+
           </section>
 
           <section className="panel-card workspace-slot workspace-slot--turnaround">
@@ -1834,6 +1849,30 @@ function App() {
                 </button>
               </div>
               <div className="action-row action-row--compact action-row--dev">
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={!canCreateModel || isCreatingModel}
+                  onClick={handleCreateModel}
+                >
+                  {isCreatingModel ? 'Submitting 3D Multiview...' : '3D Multiview'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!canCreateFrontBackModel || isCreatingFrontBackModel}
+                  onClick={handleCreateFrontBackModel}
+                >
+                  {isCreatingFrontBackModel ? 'Submitting 3D FrontBack...' : '3D FrontBack'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!canCreateFrontModel || isCreatingFrontModel}
+                  onClick={handleCreateFrontModel}
+                >
+                  {isCreatingFrontModel ? 'Submitting 3D Front...' : '3D Front'}
+                </button>
                 <button
                   type="button"
                   className="secondary-button"

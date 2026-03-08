@@ -154,12 +154,12 @@
 .workspace-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: 380px 380px minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 0.88fr) minmax(0, 2.3fr) minmax(280px, 1fr);
   grid-template-areas:
-    'prompt portrait viewer'
-    'turnaround multiview viewer';
+    'portrait viewer turnaround'
+    'prompt viewer multiview';
   grid-template-rows: repeat(2, minmax(0, 1fr));
-  height: 996px;
+  height: clamp(760px, calc(100vh - 122px), 996px);
   align-items: stretch;
 }
 
@@ -181,8 +181,8 @@
 
 .workspace-viewer {
   grid-area: viewer;
-  align-self: start;
-  height: 996px;
+  align-self: stretch;
+  height: 100%;
 }
 
 .workspace-slot {
@@ -482,7 +482,7 @@
 .prompt-textarea {
   width: 100%;
   min-height: 280px;
-  padding: 14px 16px;
+  padding: 14px 16px 78px;
   border: 1px solid var(--panel-line);
   border-radius: 26px;
   resize: vertical;
@@ -509,6 +509,20 @@
 
 .prompt-textarea--compact {
   min-height: 150px;
+}
+
+.prompt-textarea-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.prompt-textarea-shell .reference-upload--compact {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 2;
+  margin-top: 0;
 }
 
 .reference-upload {
@@ -624,21 +638,29 @@
 .action-row--portrait {
   align-items: center;
   display: grid;
-  grid-template-columns: 46px auto 46px;
-  justify-content: center;
+  grid-template-columns: max-content 52px;
+  justify-content: start;
   margin-top: 10px;
 }
 
 .action-row--portrait .primary-button {
   min-height: 46px;
   height: 46px;
-  min-width: 140px;
+  min-width: 0;
+  width: auto;
   justify-content: center;
 }
 
-.action-row--portrait .icon-button {
-  width: 46px;
+.action-row--portrait .secondary-button {
+  min-height: 46px;
   height: 46px;
+  padding-inline: 16px;
+}
+
+.action-row--portrait .accept-button {
+  min-height: 46px;
+  height: 46px;
+  padding-inline: 16px;
 }
 
 .action-row__spacer {
@@ -652,6 +674,7 @@
 
 .primary-button,
 .secondary-button,
+.accept-button,
 .ghost-button,
 .text-button {
   border: 0;
@@ -666,10 +689,15 @@
 
 .primary-button,
 .secondary-button,
+.accept-button,
 .ghost-button {
   min-height: 46px;
   padding: 0 18px;
   border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
 .primary-button {
@@ -683,6 +711,40 @@
   background: linear-gradient(90deg, rgba(36, 41, 56, 0.5), rgba(6, 8, 14, 0.5));
   color: rgba(255, 255, 255, 0.86);
   border: 1px solid var(--panel-line);
+}
+
+.accept-button {
+  background: linear-gradient(90deg, rgba(14, 242, 10, 0.96), rgba(87, 255, 124, 0.78));
+  border: 1px solid rgba(60, 255, 115, 0.42);
+  color: #17211c;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 16px 36px rgba(7, 40, 12, 0.26);
+}
+
+.accept-button__icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #1d8f36;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.accept-button__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.accept-button--icon-only {
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
+  padding: 0;
+  gap: 0;
+  border-radius: 999px;
 }
 
 .text-button {
@@ -699,6 +761,7 @@
 
 .primary-button:hover,
 .secondary-button:hover,
+.accept-button:hover,
 .ghost-button:hover,
 .text-button:hover {
   transform: translateY(-1px);
@@ -706,12 +769,14 @@
 
 .primary-button:hover,
 .secondary-button:hover,
+.accept-button:hover,
 .ghost-button:hover {
   box-shadow: 0 20px 45px rgba(255, 100, 52, 0.22);
 }
 
 .primary-button:disabled,
 .secondary-button:disabled,
+.accept-button:disabled,
 .ghost-button:disabled {
   opacity: 0.52;
   cursor: not-allowed;
@@ -786,6 +851,11 @@
 .workspace-slot--prompt .prompt-textarea {
   min-height: 0;
   height: 100%;
+}
+
+.workspace-slot--prompt .prompt-textarea-shell {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .multiview-grid {
@@ -1097,10 +1167,10 @@
   .workspace-grid {
     grid-template-columns: 1fr 1fr;
     grid-template-areas:
-      'prompt portrait'
-      'turnaround multiview'
-      'viewer viewer';
-    grid-template-rows: 1fr 1fr auto;
+      'viewer viewer'
+      'portrait turnaround'
+      'prompt multiview';
+    grid-template-rows: minmax(420px, 1.25fr) repeat(2, minmax(0, 1fr));
     height: auto;
   }
 
@@ -1127,11 +1197,11 @@
   .workspace-grid {
     grid-template-columns: 1fr;
     grid-template-areas:
-      'prompt'
       'portrait'
+      'prompt'
+      'viewer'
       'turnaround'
-      'multiview'
-      'viewer';
+      'multiview';
     grid-template-rows: none;
   }
 
@@ -1170,14 +1240,19 @@
   }
 
   .action-row--portrait {
-    grid-template-columns: 56px minmax(0, 1fr) 56px;
+    grid-template-columns: max-content 52px;
   }
 
   .primary-button,
   .secondary-button,
+  .accept-button,
   .ghost-button,
   .icon-button {
     width: 100%;
+  }
+
+  .accept-button--icon-only {
+    width: 46px;
   }
 
   .viewer-canvas,

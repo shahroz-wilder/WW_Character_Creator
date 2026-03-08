@@ -70,6 +70,10 @@ const normalizeSpriteResult = (spriteResult) => {
 const normalizeDevSettings = (devSettings) => ({
   portraitAspectRatio: devSettings?.portraitAspectRatio || '1:1',
   portraitPromptPreset: devSettings?.portraitPromptPreset || '',
+  autoMultiviewAfterPortrait:
+    typeof devSettings?.autoMultiviewAfterPortrait === 'boolean'
+      ? devSettings.autoMultiviewAfterPortrait
+      : true,
   spriteSize: Number(devSettings?.spriteSize) || 64,
   tripoAnimationMode: devSettings?.tripoAnimationMode === 'static' ? 'static' : 'animated',
   tripoRetargetAnimationName: String(devSettings?.tripoRetargetAnimationName || ''),

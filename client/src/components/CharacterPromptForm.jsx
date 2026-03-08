@@ -6,8 +6,9 @@ export function CharacterPromptForm({
   referenceImage,
   onReferenceImageChange,
   onGeneratePortrait,
-  onReset,
+  onAccept,
   isGeneratingPortrait,
+  isAcceptDisabled = false,
   title = 'Identity Portrait',
   stepLabel = 'Step 01',
 }) {
@@ -22,57 +23,53 @@ export function CharacterPromptForm({
       <label className="visually-hidden" htmlFor="character-prompt">
         Character prompt
       </label>
-      <textarea
-        id="character-prompt"
-        className="prompt-textarea"
-        value={prompt}
-        onChange={(event) => onPromptChange(event.target.value)}
-        placeholder="Stylized sci-fi ranger with ceramic shoulder plates, bright copper trims, soft freckles, calm expression..."
-        rows={7}
-        disabled={isGeneratingPortrait}
-      />
-
-      <div className="action-row action-row--portrait">
+      <div className="prompt-textarea-shell">
+        <textarea
+          id="character-prompt"
+          className="prompt-textarea"
+          value={prompt}
+          onChange={(event) => onPromptChange(event.target.value)}
+          placeholder="Stylized sci-fi ranger with ceramic shoulder plates, bright copper trims, soft freckles, calm expression..."
+          rows={7}
+          disabled={isGeneratingPortrait}
+        />
         <ReferenceUpload
           compact
           value={referenceImage}
           disabled={isGeneratingPortrait}
           onChange={onReferenceImageChange}
         />
+      </div>
+
+      <div className="action-row action-row--portrait">
         <button
           type="button"
           className="primary-button"
           onClick={onGeneratePortrait}
           disabled={isGeneratingPortrait}
-          aria-label="Generate Portrait"
+          aria-label="Generate PFP"
         >
-          {isGeneratingPortrait ? 'Generating...' : 'Generate'}
+          {isGeneratingPortrait ? 'Generating PFP...' : 'Generate PFP'}
         </button>
         <button
           type="button"
-          className="icon-button icon-button--reset"
-          onClick={onReset}
-          disabled={isGeneratingPortrait}
-          aria-label="Reset Session"
-          title="Reset Session"
+          className="accept-button accept-button--icon-only"
+          onClick={onAccept}
+          disabled={isGeneratingPortrait || isAcceptDisabled}
+          aria-label="Accept Portrait"
         >
-          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path
-              d="M7 7.5V4.5m0 0H4m3 0l-2 2"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M7.5 6.5a8 8 0 1 1-1.6 9.1"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span className="visually-hidden">Reset Session</span>
+          <span className="accept-button__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M6.5 12.5 10.5 16.5 18 8.8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
         </button>
       </div>
     </section>
