@@ -56,6 +56,16 @@ export const createTripoRouter = ({ tripoService }) => {
     }
   })
 
+  router.post('/tasks/:taskId/prerigcheck', async (req, res) => {
+    try {
+      const result = await tripoService.createPreRigCheckTask(req.params.taskId)
+      res.json(result)
+    } catch (error) {
+      const { statusCode, body } = toErrorResponse(error)
+      res.status(statusCode).json(body)
+    }
+  })
+
   router.post('/tasks/:taskId/retarget', async (req, res) => {
     try {
       const result = await tripoService.createRetargetTask(req.params.taskId, {

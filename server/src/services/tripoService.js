@@ -127,6 +127,21 @@ const buildTaskSummary = ({ taskId, task, animationMode, variantCatalog, sourceT
   const modeParam = normalizeAnimationModeParam(animationMode)
   const animationModeSuffix = modeParam ? `&animationMode=${modeParam}` : ''
   const variantUrls = {}
+  const rawPreRigOutput = task?.output || task?.outputs || null
+  const preRigCheckOutput =
+    task?.type === 'animate_prerigcheck' && rawPreRigOutput
+      ? {
+          riggable:
+            typeof rawPreRigOutput.riggable === 'boolean'
+              ? rawPreRigOutput.riggable
+              : rawPreRigOutput.riggable === 1
+                ? true
+                : rawPreRigOutput.riggable === 0
+                  ? false
+                  : null,
+          rigType: rawPreRigOutput.rig_type || rawPreRigOutput.rigType || '',
+        }
+      : null
 
   for (const variant of MODEL_VARIANT_PRIORITY) {
     if (!variantCatalog?.[variant]) {
@@ -155,8 +170,13 @@ const buildTaskSummary = ({ taskId, task, animationMode, variantCatalog, sourceT
             `/api/tripo/tasks/${taskId}/model?variant=${selectedOutput.variant}${animationModeSuffix}`,
           variant: selectedOutput.variant,
           variants: variantUrls,
+          ...(preRigCheckOutput ? { preRigCheck: preRigCheckOutput } : {}),
         }
-      : null,
+      : preRigCheckOutput
+        ? {
+            preRigCheck: preRigCheckOutput,
+          }
+        : null,
   }
 }
 
@@ -609,6 +629,42 @@ export const createTripoService = ({ tripoClient, config, taskAuditLogger = null
 
       const rigTaskId = await ensureRigTaskForSource(taskId)
       return summarizeTaskStart(rigTaskId, taskId)
+    },
+    async createPreRigCheckTask(taskId) {
+      if (!taskId) {
+        throw new AppError('Provide a Tripo mesh task before pre-rig-check.', 400)
+      }
+
+      const task = await loadTaskOrThrow(taskId)
+      const taskType = String(task?.type || '').trim()
+
+      if (taskType === 'animate_prerigcheck') {
+        return summarizeTaskStart(taskId, getSourceTaskIdFromTask(task))
+      }
+
+      if (taskType === 'animate_retarget' || taskType === 'animate_model') {
+        throw new AppError('Pre-rig-check requires a mesh task. Use the original mesh task id.', 400)
+      }
+
+      let sourceTaskId = taskId
+
+      if (taskType === 'animate_rig') {
+        sourceTaskId = getSourceTaskIdFromTask(task)
+        if (!sourceTaskId) {
+          throw new AppError('The current rig task is missing its source mesh task id.', 400)
+        }
+      } else if (!['multiview_to_model', 'image_to_model'].includes(taskType)) {
+        throw new AppError('Only Tripo mesh tasks support pre-rig-check.', 400)
+      }
+
+      if (taskType !== 'animate_rig' && task.status !== 'success') {
+        throw new AppError('Wait for the mesh task to finish successfully before pre-rig-check.', 400)
+      }
+
+      const preRigTaskId = await tripoClient.createPreRigCheckTask({
+        originalModelTaskId: sourceTaskId,
+      })
+      return summarizeTaskStart(preRigTaskId, sourceTaskId)
     },
     async createRetargetTask(taskId, { animationName } = {}) {
       if (!taskId) {

@@ -10,6 +10,11 @@ const SPRITE_VIEW_SLOTS = [
   { key: 'left', label: 'Left', aliases: ['left'] },
   { key: 'front_left', label: 'FrontLeft', aliases: ['front_left', 'frontLeft', 'frontleft'] },
 ]
+const SPRITE_360_SLOT = {
+  key: 'view_360',
+  label: '360',
+  aliases: ['view_360', 'view360', '360'],
+}
 
 const getFrames = (direction) => {
   if (Array.isArray(direction?.frameDataUrls) && direction.frameDataUrls.length > 0) {
@@ -38,7 +43,7 @@ const resolveDirectionByAliases = (directions, aliases = []) => {
   return null
 }
 
-const AnimatedSpriteTile = ({ direction, label }) => {
+const AnimatedSpriteTile = ({ direction, label, emptyCopy }) => {
   const frames = useMemo(() => getFrames(direction), [direction])
   const [frameIndex, setFrameIndex] = useState(0)
   const [hasImageError, setHasImageError] = useState(false)
@@ -65,7 +70,7 @@ const AnimatedSpriteTile = ({ direction, label }) => {
   if (frames.length === 0 || hasImageError) {
     return (
       <div className="empty-state empty-state--compact">
-        <p>{label} run preview will appear here.</p>
+        <p>{emptyCopy || `${label} run preview will appear here.`}</p>
       </div>
     )
   }
@@ -79,13 +84,21 @@ const AnimatedSpriteTile = ({ direction, label }) => {
   )
 }
 
-export function SpriteGrid({ directions, embedded = false }) {
+export function SpriteGrid({ directions, displayMode = 'walk_8', embedded = false }) {
+  const normalizedDisplayMode = displayMode === 'view_360' ? 'view_360' : 'walk_8'
+  const visibleSlots =
+    normalizedDisplayMode === 'view_360' ? [SPRITE_360_SLOT] : SPRITE_VIEW_SLOTS
+
   const renderGrid = () => (
-    <div className="sprite-grid">
-      {SPRITE_VIEW_SLOTS.map(({ key, label, aliases }) => (
+    <div className={`sprite-grid${normalizedDisplayMode === 'view_360' ? ' sprite-grid--single' : ''}`}>
+      {visibleSlots.map(({ key, label, aliases }) => (
         <article className="view-card" key={key}>
           <span className="view-card__label">{label}</span>
-          <AnimatedSpriteTile direction={resolveDirectionByAliases(directions, aliases)} label={label} />
+          <AnimatedSpriteTile
+            direction={resolveDirectionByAliases(directions, aliases)}
+            label={label}
+            emptyCopy={normalizedDisplayMode === 'view_360' ? '360 preview will appear here.' : ''}
+          />
         </article>
       ))}
     </div>

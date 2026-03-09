@@ -136,6 +136,16 @@ export const createTripoClient = ({ apiKey, baseUrl, auditLogger = null }) => {
         missingTaskIdMessage: 'Tripo did not return a rig task id.',
       })
     },
+    async createPreRigCheckTask({ originalModelTaskId }) {
+      return submitTask({
+        action: 'animate_prerigcheck',
+        requestBody: {
+          type: 'animate_prerigcheck',
+          original_model_task_id: originalModelTaskId,
+        },
+        missingTaskIdMessage: 'Tripo did not return a pre-rig-check task id.',
+      })
+    },
     async createAnimationTask({
       originalModelTaskId,
       animation = 'idle',

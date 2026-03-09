@@ -67,6 +67,29 @@ const normalizeSpriteResult = (spriteResult) => {
   }
 }
 
+const normalizePipelineState = (pipelineState) => ({
+  unlocked: {
+    step1:
+      typeof pipelineState?.unlocked?.step1 === 'boolean' ? pipelineState.unlocked.step1 : true,
+    step2:
+      typeof pipelineState?.unlocked?.step2 === 'boolean' ? pipelineState.unlocked.step2 : false,
+    step3:
+      typeof pipelineState?.unlocked?.step3 === 'boolean' ? pipelineState.unlocked.step3 : false,
+    step4:
+      typeof pipelineState?.unlocked?.step4 === 'boolean' ? pipelineState.unlocked.step4 : false,
+  },
+  approved: {
+    step1:
+      typeof pipelineState?.approved?.step1 === 'boolean' ? pipelineState.approved.step1 : false,
+    step2:
+      typeof pipelineState?.approved?.step2 === 'boolean' ? pipelineState.approved.step2 : false,
+    step3:
+      typeof pipelineState?.approved?.step3 === 'boolean' ? pipelineState.approved.step3 : false,
+    step4:
+      typeof pipelineState?.approved?.step4 === 'boolean' ? pipelineState.approved.step4 : false,
+  },
+})
+
 const normalizeDevSettings = (devSettings) => ({
   portraitAspectRatio: devSettings?.portraitAspectRatio || '1:1',
   portraitPromptPreset: devSettings?.portraitPromptPreset || '',
@@ -145,6 +168,7 @@ export const loadPersistedSession = () => {
         ? parsed.history.map(normalizeHistoryEntry)
         : [],
       tripoJob: normalizeTripoJob(parsed?.tripoJob),
+      pipelineState: normalizePipelineState(parsed?.pipelineState),
     }
   } catch {
     return null
@@ -180,6 +204,7 @@ export const loadPersistedRichSession = async () => {
           }))
         : [],
       tripoJob: normalizeTripoJob(payload.tripoJob),
+      pipelineState: normalizePipelineState(payload.pipelineState),
     }
   } catch {
     return null
@@ -196,6 +221,7 @@ export const savePersistedSession = ({
   currentRunId,
   history,
   tripoJob,
+  pipelineState,
 }) => {
   if (!canUseStorage()) {
     return Promise.resolve()
@@ -218,6 +244,7 @@ export const savePersistedSession = ({
     currentRunId: currentRunId || '',
     history: sanitizedHistory,
     tripoJob: normalizeTripoJob(tripoJob),
+    pipelineState: normalizePipelineState(pipelineState),
   }
 
   const richPayload = {
@@ -230,6 +257,7 @@ export const savePersistedSession = ({
     currentRunId: currentRunId || '',
     history: richHistory,
     tripoJob: normalizeTripoJob(tripoJob),
+    pipelineState: normalizePipelineState(pipelineState),
   }
 
   try {
@@ -250,6 +278,7 @@ export const savePersistedSession = ({
         currentRunId: currentRunId || '',
         history: Array.isArray(history) ? history.slice(0, HISTORY_LIMIT) : [],
         tripoJob: normalizeTripoJob(tripoJob),
+        pipelineState: normalizePipelineState(pipelineState),
       },
       STORE_KEY,
     )

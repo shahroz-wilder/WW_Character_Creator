@@ -103,6 +103,11 @@ export const createTripoRigTask = async (taskId) =>
     method: 'POST',
   })
 
+export const createTripoPreRigCheckTask = async (taskId) =>
+  requestJson(`/api/tripo/tasks/${encodeURIComponent(taskId)}/prerigcheck`, {
+    method: 'POST',
+  })
+
 export const createTripoRetargetTask = async (taskId, payload = {}) =>
   requestJson(`/api/tripo/tasks/${encodeURIComponent(taskId)}/retarget`, {
     method: 'POST',

@@ -3,6 +3,7 @@ import JSZip from 'jszip'
 import {
   createTripoFrontBackTask,
   createTripoFrontTask,
+  createTripoPreRigCheckTask,
   createTripoRetargetTask,
   createTripoRigTask,
   createTripoTask,
@@ -100,6 +101,44 @@ const DEFAULT_SPRITE_FILES = {
   left: '/default-sprites/left.gif',
   front_left: '/default-sprites/front_left.gif',
 }
+const DEFAULT_PROGRESS_BOUNDARIES = Object.freeze([0.2, 0.34, 0.8, 1])
+const PIPELINE_POLL_INTERVAL_MS = 3000
+const MODEL_CHAIN_STAGE_DELAY_MS = 3000
+const PIPELINE_POLL_MAX_ATTEMPTS = 120
+const SPRITE_REQUIRED_KEYS = Object.freeze([
+  'view_360',
+  ...MODEL_VIEW_CAPTURE_ORDER.map((view) => view.key),
+])
+const PIPELINE_INITIAL_STATE = Object.freeze({
+  unlocked: Object.freeze({
+    step1: true,
+    step2: false,
+    step3: false,
+    step4: false,
+  }),
+  approved: Object.freeze({
+    step1: false,
+    step2: false,
+    step3: false,
+    step4: false,
+  }),
+})
+const SPRITE_DIRECTION_ALIASES = Object.freeze({
+  view_360: ['view_360', 'view360', '360'],
+  front: ['front'],
+  front_right: ['front_right', 'frontRight', 'frontright'],
+  right: ['right'],
+  back_right: ['back_right', 'backRight', 'backright'],
+  back: ['back'],
+  back_left: ['back_left', 'backLeft', 'backleft', 'beckleft'],
+  left: ['left'],
+  front_left: ['front_left', 'frontLeft', 'frontleft'],
+})
+
+const createInitialPipelineState = () => ({
+  unlocked: { ...PIPELINE_INITIAL_STATE.unlocked },
+  approved: { ...PIPELINE_INITIAL_STATE.approved },
+})
 
 const appendCacheBust = (url, cacheKey) => {
   if (!cacheKey) {
@@ -150,6 +189,18 @@ const getDataUrlFileExtension = (dataUrl) => {
 const dataUrlToBase64Payload = (dataUrl) => {
   const match = String(dataUrl || '').match(/^data:[^;]+;base64,(.+)$/)
   return match?.[1] || ''
+}
+
+const base64PayloadToBlob = (base64Payload, mimeType = 'application/octet-stream') => {
+  const binaryString = window.atob(base64Payload)
+  const binaryLength = binaryString.length
+  const bytes = new Uint8Array(binaryLength)
+
+  for (let index = 0; index < binaryLength; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index)
+  }
+
+  return new Blob([bytes], { type: mimeType })
 }
 
 const loadImageFromDataUrl = (dataUrl) =>
@@ -328,6 +379,122 @@ const formatModelLabel = (value) => {
   return trimmed || 'Not generated yet.'
 }
 
+const sanitizeProviderNames = (value) =>
+  String(value || '')
+    .replace(/tripo/gi, '3D service')
+    .replace(/gemini/gi, 'image service')
+
+const clampToProgressRange = (value) => Math.min(1, Math.max(0, Number(value) || 0))
+
+const resolveSpriteDirection = (directions, key) => {
+  if (!directions || typeof directions !== 'object') {
+    return null
+  }
+
+  const aliases = SPRITE_DIRECTION_ALIASES[key] || [key]
+  for (const alias of aliases) {
+    if (directions[alias]) {
+      return directions[alias]
+    }
+  }
+
+  return null
+}
+
+const hasUsableSpriteDirection = (direction) => {
+  if (!direction || typeof direction !== 'object') {
+    return false
+  }
+
+  const source = String(direction.source || '').trim().toLowerCase()
+  if (source === 'default-sprite-pack') {
+    return false
+  }
+
+  if (Array.isArray(direction.frameDataUrls) && direction.frameDataUrls.length > 0) {
+    return true
+  }
+
+  return Boolean(direction.previewDataUrl)
+}
+
+const hasRequiredSpriteBundle = (spritePayload) => {
+  const directions = spritePayload?.directions
+  if (!directions || typeof directions !== 'object') {
+    return false
+  }
+
+  return SPRITE_REQUIRED_KEYS.every((directionKey) =>
+    hasUsableSpriteDirection(resolveSpriteDirection(directions, directionKey)),
+  )
+}
+
+const normalizePipelineState = (value) => {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  return {
+    unlocked: {
+      step1:
+        typeof value?.unlocked?.step1 === 'boolean'
+          ? value.unlocked.step1
+          : PIPELINE_INITIAL_STATE.unlocked.step1,
+      step2: Boolean(value?.unlocked?.step2),
+      step3: Boolean(value?.unlocked?.step3),
+      step4: Boolean(value?.unlocked?.step4),
+    },
+    approved: {
+      step1: Boolean(value?.approved?.step1),
+      step2: Boolean(value?.approved?.step2),
+      step3: Boolean(value?.approved?.step3),
+      step4: Boolean(value?.approved?.step4),
+    },
+  }
+}
+
+const derivePipelineStateFromArtifacts = ({
+  portraitResult,
+  multiviewResult,
+  tripoJob,
+  spriteResult,
+  pipelineState,
+}) => {
+  const normalizedPipelineState = normalizePipelineState(pipelineState)
+  if (normalizedPipelineState) {
+    return normalizedPipelineState
+  }
+
+  const nextPipelineState = createInitialPipelineState()
+  if (portraitResult?.imageDataUrl) {
+    nextPipelineState.approved.step1 = true
+    nextPipelineState.unlocked.step2 = true
+  }
+
+  if (hasCompleteTurnaround(multiviewResult?.views)) {
+    nextPipelineState.approved.step2 = true
+    nextPipelineState.unlocked.step3 = true
+  }
+
+  const hasModel = Boolean(
+    tripoJob?.status === 'success' &&
+      (tripoJob?.outputs?.modelUrl ||
+        tripoJob?.outputs?.downloadUrl ||
+        (tripoJob?.outputs?.variants && Object.keys(tripoJob.outputs.variants).length > 0)),
+  )
+  if (hasModel) {
+    nextPipelineState.approved.step3 = true
+    nextPipelineState.unlocked.step4 = true
+  }
+
+  if (hasRequiredSpriteBundle(spriteResult)) {
+    nextPipelineState.approved.step4 = true
+    nextPipelineState.unlocked.step4 = true
+  }
+
+  return nextPipelineState
+}
+
 const getAnimationModeForTaskType = (taskType) => {
   const normalizedTaskType = String(taskType || '').trim().toLowerCase()
   return normalizedTaskType === 'animate_retarget' || normalizedTaskType === 'animate_model'
@@ -437,6 +604,7 @@ function App() {
   const [isCreatingModel, setIsCreatingModel] = useState(false)
   const [isCreatingFrontBackModel, setIsCreatingFrontBackModel] = useState(false)
   const [isCreatingFrontModel, setIsCreatingFrontModel] = useState(false)
+  const [isCreatingPreRigCheckTask, setIsCreatingPreRigCheckTask] = useState(false)
   const [isCreatingRigTask, setIsCreatingRigTask] = useState(false)
   const [isCreatingRetargetTask, setIsCreatingRetargetTask] = useState(false)
   const [isGeneratingSprite, setIsGeneratingSprite] = useState(false)
@@ -450,14 +618,25 @@ function App() {
   const [isCapturingModelViews, setIsCapturingModelViews] = useState(false)
   const [isCapturingWalkSprites, setIsCapturingWalkSprites] = useState(false)
   const [isBuildingModelViewGif, setIsBuildingModelViewGif] = useState(false)
-  const [modelPreviewMode, setModelPreviewMode] = useState('animated')
+  const [modelPreviewMode, setModelPreviewMode] = useState('apose')
+  const [spritePreviewMode, setSpritePreviewMode] = useState('walk_8')
   const [defaultSpritesCacheKey, setDefaultSpritesCacheKey] = useState(() => Date.now())
   const [existingTripoTaskIdInput, setExistingTripoTaskIdInput] = useState('')
+  const [animateRigTaskIdInput, setAnimateRigTaskIdInput] = useState('')
+  const [progressBoundaries, setProgressBoundaries] = useState(() => [...DEFAULT_PROGRESS_BOUNDARIES])
+  const [pipelineState, setPipelineState] = useState(
+    () => normalizePipelineState(initialSession?.pipelineState) || createInitialPipelineState(),
+  )
+  const [isPreparingDownloadBundle, setIsPreparingDownloadBundle] = useState(false)
   const [healthVersions, setHealthVersions] = useState(() => ({
     tripoModelVersion: '',
     tripoRigModelVersion: '',
   }))
   const viewerCaptureApiRef = useRef(null)
+  const statusProgressTrackRef = useRef(null)
+  const step01PanelRef = useRef(null)
+  const step02PanelRef = useRef(null)
+  const step03BoundaryRef = useRef(null)
   const modelOutputVariants = tripoJob.outputs?.variants || null
   const hasModelViewPack = MODEL_VIEW_CAPTURE_ORDER.some((view) => Boolean(modelViewPack?.[view.key]?.dataUrl))
   const availableModelVariants = MODEL_OUTPUT_VARIANT_ORDER.filter((variant) =>
@@ -488,6 +667,11 @@ function App() {
   const activeSpriteDirections = devSettings.defaultSpritesEnabled
     ? buildDefaultSpriteDirections(defaultSpritesCacheKey)
     : spriteResult?.directions
+  const resolvedSpritePreviewMode = spritePreviewMode === 'view_360' ? 'view_360' : 'walk_8'
+  const isStep01Unlocked = pipelineState.unlocked.step1
+  const isStep02Unlocked = pipelineState.unlocked.step2
+  const isStep03Unlocked = pipelineState.unlocked.step3
+  const isStep04Unlocked = pipelineState.unlocked.step4
   const retargetStartTaskId =
     tripoJob.taskType === 'animate_rig'
       ? tripoJob.taskId
@@ -499,58 +683,172 @@ function App() {
     multiviewResult?.views?.front?.imageDataUrl && multiviewResult?.views?.back?.imageDataUrl,
   )
   const canCreateFrontModel = Boolean(multiviewResult?.views?.front?.imageDataUrl)
-  const canAcceptPortrait = Boolean(portraitResult?.imageDataUrl && turnaroundGenerationMode === '')
-  const canAnimateRig = Boolean(
-    tripoJob.taskId &&
-      tripoJob.status === 'success' &&
-      ['multiview_to_model', 'image_to_model'].includes(tripoJob.taskType),
-  )
+  const resolvedAnimateRigTaskId = String(animateRigTaskIdInput || '').trim() || tripoJob.taskId
+  const canAnimateRig = Boolean(resolvedAnimateRigTaskId)
   const canAnimateRetarget = Boolean(retargetStartTaskId && tripoJob.status === 'success')
+  const preRigCheckResult = tripoJob.outputs?.preRigCheck || null
+  const preRigCheckRiggableLabel =
+    preRigCheckResult?.riggable === true
+      ? 'true'
+      : preRigCheckResult?.riggable === false
+        ? 'false'
+        : 'unknown'
+  const hasPortraitStepReady = Boolean(portraitResult?.imageDataUrl)
+  const hasTurnaroundStepReady = hasCompleteTurnaround(multiviewResult?.views)
+  const hasStep03ChainResult = Boolean(
+    activeModelUrl &&
+      tripoJob.status === 'success' &&
+      ['animate_retarget', 'animate_model'].includes(
+        String(tripoJob.taskType || '').trim().toLowerCase(),
+      ),
+  )
+  const hasStep04Output = hasRequiredSpriteBundle(spriteResult)
+  const canApproveStep01 = isStep01Unlocked && hasPortraitStepReady && !isGeneratingPortrait
+  const canRunStep02Generation =
+    isStep02Unlocked && hasPortraitStepReady && !turnaroundGenerationMode && !isGeneratingPortrait
+  const canApproveStep02 = isStep02Unlocked && hasTurnaroundStepReady && !turnaroundGenerationMode
+  const canRunStep03Generation =
+    isStep03Unlocked &&
+    hasTurnaroundStepReady &&
+    !isCreatingModel &&
+    !isCreatingRigTask &&
+    !isCreatingRetargetTask
+  const canApproveStep03 = isStep03Unlocked && hasStep03ChainResult && !isCreatingRetargetTask
+  const canRunStep04Generation =
+    isStep04Unlocked &&
+    hasStep03ChainResult &&
+    !isGeneratingSprite &&
+    !isCapturingWalkSprites &&
+    !isPreparingDownloadBundle
+  const canDownloadFinalBundle =
+    isStep04Unlocked && pipelineState.approved.step4 && hasStep04Output && !isPreparingDownloadBundle
+
+  const currentStepIndex = pipelineState.approved.step4 && hasStep04Output
+    ? 4
+    : pipelineState.unlocked.step4 || pipelineState.unlocked.step3
+      ? 3
+      : pipelineState.unlocked.step2
+        ? 2
+        : 1
+  const progressFillRatio = clampToProgressRange(
+    progressBoundaries[Math.max(0, Math.min(currentStepIndex - 1, progressBoundaries.length - 1))] ||
+      progressBoundaries[0] ||
+      DEFAULT_PROGRESS_BOUNDARIES[0],
+  )
+  const progressFillWidth = `${(progressFillRatio * 100).toFixed(2)}%`
 
   const currentPipelineState = error
     ? 'Attention needed'
-    : isGeneratingPortrait
-      ? 'Generating portrait'
-      : turnaroundGenerationMode === 'front-only'
-        ? 'Generating front view'
-      : turnaroundGenerationMode === 'full'
-        ? 'Generating turnaround'
-        : isGeneratingSprite
-          ? 'Generating sprite run'
-          : isCapturingWalkSprites
-            ? 'Capturing walk sprites'
-          : isCreatingModel
-            ? 'Submitting multiview model'
-            : isCreatingFrontBackModel
-              ? 'Submitting front-back model'
-              : isCreatingFrontModel
-                ? 'Submitting front-view model'
-                : isCreatingRigTask
-                  ? 'Submitting rig task'
-                  : isCreatingRetargetTask
-                    ? 'Submitting retarget task'
-                  : isRefreshingTripoJob
-                    ? 'Refreshing Tripo result'
-                    : tripoJob.status === 'success'
-                      ? '3D model ready'
-                    : tripoJob.status === 'running'
-                      ? tripoJob.taskType === 'animate_rig'
-                        ? 'Tripo is rigging the model'
-                        : tripoJob.taskType === 'animate_retarget'
-                          ? 'Tripo is applying animation'
-                          : 'Tripo is building the model'
-                      : tripoJob.status === 'queued'
-                        ? 'Tripo task queued'
-                        : portraitResult?.imageDataUrl
-                          ? 'Portrait ready for next step'
-                          : 'Ready for a new character'
+    : isPreparingDownloadBundle
+      ? 'Preparing final bundle'
+      : isGeneratingPortrait
+        ? 'Generating portrait'
+        : !pipelineState.approved.step1 && hasPortraitStepReady
+          ? 'Portrait ready for approval'
+          : turnaroundGenerationMode
+            ? 'Generating multiview'
+            : !pipelineState.approved.step2 && hasTurnaroundStepReady
+              ? 'Multiview ready for approval'
+              : isCreatingModel || isCreatingRigTask || isCreatingRetargetTask
+                ? isCreatingRetargetTask
+                  ? 'Applying animation'
+                  : isCreatingRigTask
+                    ? 'Rigging model'
+                    : 'Generating 3D model'
+                : !pipelineState.approved.step3 && hasStep03ChainResult
+                  ? '3D model ready for approval'
+                  : isGeneratingSprite || isCapturingWalkSprites
+                    ? 'Generating 2.5D sprites'
+                    : pipelineState.approved.step4 && hasStep04Output
+                      ? 'Pipeline complete'
+                      : isStep04Unlocked
+                        ? 'Ready for 2.5D generation'
+                        : isStep03Unlocked
+                          ? 'Ready for 3D generation'
+                          : isStep02Unlocked
+                            ? 'Ready for 2D generation'
+                            : 'Ready for portrait generation'
 
-  const pipelineSummary = tripoJob.taskId
-    ? `${tripoJob.status.toUpperCase()}${tripoJob.progress ? ` ${tripoJob.progress}%` : ''}`
-    : portraitResult?.imageDataUrl
-      ? 'PORTRAIT READY'
-      : 'IDLE'
-  const topBarMessage = error || pipelineSummary
+  const pipelineSummary = pipelineState.approved.step4
+    ? 'COMPLETE'
+    : pipelineState.unlocked.step4
+      ? 'STEP 04'
+      : pipelineState.unlocked.step3
+        ? 'STEP 03'
+        : pipelineState.unlocked.step2
+          ? 'STEP 02'
+          : 'STEP 01'
+  const topBarMessage = sanitizeProviderNames(error) || pipelineSummary
+
+  const recalculateProgressBoundaries = useCallback(() => {
+    const trackElement = statusProgressTrackRef.current
+
+    if (!trackElement) {
+      return
+    }
+
+    const trackRect = trackElement.getBoundingClientRect()
+    if (!trackRect.width || !Number.isFinite(trackRect.width)) {
+      return
+    }
+
+    const toBoundary = (element, fallbackValue) => {
+      if (!element) {
+        return fallbackValue
+      }
+
+      const elementRect = element.getBoundingClientRect()
+      if (!Number.isFinite(elementRect.right)) {
+        return fallbackValue
+      }
+
+      return clampToProgressRange((elementRect.right - trackRect.left) / trackRect.width)
+    }
+
+    const nextStep01 = toBoundary(step01PanelRef.current, DEFAULT_PROGRESS_BOUNDARIES[0])
+    const nextStep02Raw = toBoundary(step02PanelRef.current, DEFAULT_PROGRESS_BOUNDARIES[1])
+    const nextStep02 = clampToProgressRange(Math.max(nextStep02Raw, nextStep01 + 0.01))
+    const nextStep03Raw = toBoundary(step03BoundaryRef.current, DEFAULT_PROGRESS_BOUNDARIES[2])
+    const nextStep03 = clampToProgressRange(Math.max(nextStep03Raw, nextStep02 + 0.01))
+    const nextBoundaries = [nextStep01, nextStep02, nextStep03, 1]
+
+    setProgressBoundaries((currentBoundaries) => {
+      const hasMeaningfulDifference = nextBoundaries.some(
+        (value, index) => Math.abs(value - (currentBoundaries[index] || 0)) > 0.002,
+      )
+
+      return hasMeaningfulDifference ? nextBoundaries : currentBoundaries
+    })
+  }, [])
+
+  useEffect(() => {
+    const refreshBoundaries = () => {
+      window.requestAnimationFrame(recalculateProgressBoundaries)
+    }
+
+    refreshBoundaries()
+
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(refreshBoundaries)
+    const observedElements = [
+      statusProgressTrackRef.current,
+      step01PanelRef.current,
+      step02PanelRef.current,
+      step03BoundaryRef.current,
+    ].filter(Boolean)
+
+    observedElements.forEach((element) => resizeObserver?.observe(element))
+    window.addEventListener('resize', refreshBoundaries)
+
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', refreshBoundaries)
+    }
+  }, [recalculateProgressBoundaries])
+
+  useEffect(() => {
+    window.requestAnimationFrame(recalculateProgressBoundaries)
+  }, [isDevPanelOpen, recalculateProgressBoundaries])
 
   useEffect(() => {
     document.title = 'WW Character Creator'
@@ -642,6 +940,15 @@ function App() {
               }
             : currentTripoJob,
         )
+        setPipelineState(
+          derivePipelineStateFromArtifacts({
+            portraitResult: session.portraitResult,
+            multiviewResult: session.multiviewResult,
+            tripoJob: session.tripoJob,
+            spriteResult: session.spriteResult,
+            pipelineState: session.pipelineState,
+          }),
+        )
       })
       .finally(() => {
         if (!isCancelled) {
@@ -669,6 +976,7 @@ function App() {
       currentRunId,
       history,
       tripoJob,
+      pipelineState,
     })
   }, [
     currentRunId,
@@ -679,9 +987,27 @@ function App() {
     multiviewResult,
     spriteResult,
     portraitResult,
+    pipelineState,
     prompt,
     tripoJob,
   ])
+
+  useEffect(() => {
+    setPipelineState((currentState) => {
+      const shouldApproveStep4 = currentState.unlocked.step4 && hasStep04Output
+      if (currentState.approved.step4 === shouldApproveStep4) {
+        return currentState
+      }
+
+      return {
+        unlocked: { ...currentState.unlocked },
+        approved: {
+          ...currentState.approved,
+          step4: shouldApproveStep4,
+        },
+      }
+    })
+  }, [hasStep04Output])
 
   useEffect(() => {
     setModelViewPack(null)
@@ -689,7 +1015,7 @@ function App() {
 
   useEffect(() => {
     if (!tripoJob.taskId) {
-      setModelPreviewMode('animated')
+      setModelPreviewMode('apose')
       return
     }
 
@@ -703,6 +1029,41 @@ function App() {
   const handleViewerCaptureApiReady = useCallback((captureApi) => {
     viewerCaptureApiRef.current = captureApi || null
   }, [])
+
+  const updatePipelineState = useCallback((updater) => {
+    setPipelineState((currentState) => {
+      const draftState = {
+        unlocked: { ...currentState.unlocked },
+        approved: { ...currentState.approved },
+      }
+      updater(draftState)
+      return draftState
+    })
+  }, [])
+
+  const resetPipelineFromStep = useCallback(
+    (stepNumber) => {
+      updatePipelineState((nextState) => {
+        nextState.unlocked.step1 = true
+        if (stepNumber <= 1) {
+          nextState.approved.step1 = false
+          nextState.unlocked.step2 = false
+        }
+        if (stepNumber <= 2) {
+          nextState.approved.step2 = false
+          nextState.unlocked.step3 = false
+        }
+        if (stepNumber <= 3) {
+          nextState.approved.step3 = false
+          nextState.unlocked.step4 = false
+        }
+        if (stepNumber <= 4) {
+          nextState.approved.step4 = false
+        }
+      })
+    },
+    [updatePipelineState],
+  )
 
   const applyTripoJobUpdate = (nextJob, runId = currentRunId) => {
     setTripoJob((currentJob) => ({ ...currentJob, ...nextJob }))
@@ -721,6 +1082,30 @@ function App() {
     const nextJob = await getTripoTask(taskId, animationMode)
 
     return nextJob
+  }
+
+  const waitForDelay = (durationMs) =>
+    new Promise((resolve) => {
+      window.setTimeout(resolve, durationMs)
+    })
+
+  const waitForTripoTaskSuccess = async (taskId, animationMode = '') => {
+    for (let attempt = 0; attempt < PIPELINE_POLL_MAX_ATTEMPTS; attempt += 1) {
+      const nextJob = await refreshTripoJob(taskId, animationMode || devSettings.tripoAnimationMode)
+      applyTripoJobUpdate(nextJob, currentRunId)
+
+      if (nextJob.status === 'success') {
+        return nextJob
+      }
+
+      if (nextJob.status === 'failed') {
+        throw new Error(sanitizeProviderNames(nextJob.error) || '3D generation failed.')
+      }
+
+      await waitForDelay(PIPELINE_POLL_INTERVAL_MS)
+    }
+
+    throw new Error('3D generation timed out.')
   }
 
   const applyTripoTaskStart = (
@@ -747,6 +1132,141 @@ function App() {
       )
     }
   }
+
+  const buildGifBlobFromFrames = useCallback(async ({ frameDataUrls, width, height, delayMs = 110 }) => {
+    const frames = Array.isArray(frameDataUrls)
+      ? frameDataUrls.filter((frameDataUrl) => Boolean(frameDataUrl))
+      : []
+    if (frames.length === 0) {
+      throw new Error('No sprite frames are available for GIF generation.')
+    }
+
+    const [{ default: GIF }, { default: workerScript }] = await Promise.all([
+      import('gif.js'),
+      import('gif.js/dist/gif.worker.js?url'),
+    ])
+    const gif = new GIF({
+      workers: 2,
+      quality: 10,
+      width,
+      height,
+      background: GIF_TRANSPARENT_CSS,
+      transparent: GIF_TRANSPARENT_HEX,
+      workerScript,
+    })
+    const frameCanvas = document.createElement('canvas')
+    frameCanvas.width = width
+    frameCanvas.height = height
+    const frameContext = frameCanvas.getContext('2d')
+
+    if (!frameContext) {
+      throw new Error('2D canvas context is unavailable for GIF generation.')
+    }
+
+    for (const frameDataUrl of frames) {
+      const frameImage = await loadImageFromDataUrl(frameDataUrl)
+      frameContext.clearRect(0, 0, width, height)
+      frameContext.imageSmoothingEnabled = !MODEL_VIEW_PIXEL_ART_MODE
+      frameContext.drawImage(frameImage, 0, 0, width, height)
+      const frameImageData = frameContext.getImageData(0, 0, width, height)
+      const framePixels = frameImageData.data
+
+      for (let pixelIndex = 0; pixelIndex < framePixels.length; pixelIndex += 4) {
+        const alpha = framePixels[pixelIndex + 3]
+        if (alpha <= GIF_ALPHA_CUTOFF) {
+          framePixels[pixelIndex] = GIF_TRANSPARENT_RGB.r
+          framePixels[pixelIndex + 1] = GIF_TRANSPARENT_RGB.g
+          framePixels[pixelIndex + 2] = GIF_TRANSPARENT_RGB.b
+        }
+        framePixels[pixelIndex + 3] = 255
+      }
+
+      gif.addFrame(frameImageData, {
+        delay: delayMs,
+      })
+    }
+
+    return new Promise((resolve) => {
+      gif.on('finished', (blob) => resolve(blob))
+      gif.render()
+    })
+  }, [])
+
+  const buildDirectionGifBlob = useCallback(
+    async (direction, fallbackSize = DEV_PRESETS.spriteSize) => {
+      if (!hasUsableSpriteDirection(direction)) {
+        throw new Error('Missing sprite output.')
+      }
+
+      const frameDataUrls = Array.isArray(direction?.frameDataUrls)
+        ? direction.frameDataUrls.filter((frameDataUrl) => Boolean(frameDataUrl))
+        : []
+      const previewDataUrl = String(direction?.previewDataUrl || '').trim()
+      if (frameDataUrls.length === 0 && /^data:image\/gif;base64,/i.test(previewDataUrl)) {
+        const base64Payload = dataUrlToBase64Payload(previewDataUrl)
+        if (base64Payload) {
+          return base64PayloadToBlob(base64Payload, 'image/gif')
+        }
+      }
+
+      if (frameDataUrls.length === 0 && /\.gif(?:$|\?)/i.test(previewDataUrl)) {
+        const response = await fetch(previewDataUrl)
+        if (response.ok) {
+          return response.blob()
+        }
+      }
+
+      const usableFrames = frameDataUrls.length > 0 ? frameDataUrls : previewDataUrl ? [previewDataUrl] : []
+
+      if (usableFrames.length === 0) {
+        throw new Error('Missing sprite output.')
+      }
+
+      const firstFrame = await loadImageFromDataUrl(usableFrames[0])
+      const width = firstFrame.naturalWidth || firstFrame.width || fallbackSize
+      const height = firstFrame.naturalHeight || firstFrame.height || fallbackSize
+      const frameDelay = Number(direction?.delayMs) > 0 ? Number(direction.delayMs) : 110
+      return buildGifBlobFromFrames({
+        frameDataUrls: usableFrames,
+        width,
+        height,
+        delayMs: frameDelay,
+      })
+    },
+    [buildGifBlobFromFrames],
+  )
+
+  const buildViewerWalkDirections = useCallback(async (capturedDirections, captureSize) => {
+    const resizedEntries = await Promise.all(
+      MODEL_VIEW_CAPTURE_ORDER.map(async (view) => {
+        const directionCapture = capturedDirections?.[view.key]
+        if (!directionCapture?.frameDataUrls?.length) {
+          return [view.key, null]
+        }
+
+        const resizedFrames = await resizeFrameSequenceForModelView(
+          directionCapture.frameDataUrls,
+          captureSize,
+        )
+
+        return [
+          view.key,
+          {
+            previewDataUrl: resizedFrames[0] || '',
+            frameDataUrls: resizedFrames,
+            delayMs: directionCapture.delayMs,
+            source: 'viewer-walk-capture',
+            frames: {
+              count: resizedFrames.length,
+              format: 'base64-frame-sequence',
+            },
+          },
+        ]
+      }),
+    )
+
+    return Object.fromEntries(resizedEntries.filter((entry) => Boolean(entry[1])))
+  }, [])
 
   useEffect(() => {
     if (!tripoJob.taskId || !['queued', 'running'].includes(tripoJob.status)) {
@@ -778,7 +1298,7 @@ function App() {
           setTripoJob((currentJob) => ({
             ...currentJob,
             status: 'failed',
-            error: pollError.message,
+            error: sanitizeProviderNames(pollError.message),
           }))
         }
       } finally {
@@ -786,7 +1306,7 @@ function App() {
       }
     }
 
-    const intervalId = window.setInterval(poll, 3000)
+    const intervalId = window.setInterval(poll, PIPELINE_POLL_INTERVAL_MS)
 
     return () => {
       isCancelled = true
@@ -798,6 +1318,7 @@ function App() {
     mode = 'full',
     portraitSource = portraitResult,
     runIdForHistory = currentRunId,
+    resetDownstream = true,
   } = {}) => {
     if (!portraitSource?.imageDataUrl) {
       setError('Generate a portrait first to establish the character identity.')
@@ -805,6 +1326,9 @@ function App() {
     }
 
     setError('')
+    if (resetDownstream) {
+      resetPipelineFromStep(2)
+    }
     setTurnaroundGenerationMode(mode)
     setTripoJob(EMPTY_JOB)
     setSpriteResult(null)
@@ -842,6 +1366,7 @@ function App() {
     }
 
     setError('')
+    resetPipelineFromStep(1)
     setIsGeneratingPortrait(true)
     setMultiviewResult(null)
     setSpriteResult(null)
@@ -884,11 +1409,39 @@ function App() {
     setIsGeneratingPortrait(false)
   }
 
-  const handleAcceptPortrait = async () => {
+  const handleAcceptPortrait = () => {
+    if (!canApproveStep01) {
+      return
+    }
+
+    setError('')
+    updatePipelineState((nextState) => {
+      nextState.approved.step1 = true
+      nextState.unlocked.step2 = true
+    })
+  }
+
+  const handleGenerateStep02 = async () => {
+    if (!canRunStep02Generation) {
+      return
+    }
+
     await runMultiviewGeneration({
       mode: 'full',
       portraitSource: portraitResult,
       runIdForHistory: currentRunId,
+    })
+  }
+
+  const handleAcceptStep02 = () => {
+    if (!canApproveStep02) {
+      return
+    }
+
+    setError('')
+    updatePipelineState((nextState) => {
+      nextState.approved.step2 = true
+      nextState.unlocked.step3 = true
     })
   }
 
@@ -897,6 +1450,7 @@ function App() {
       mode,
       portraitSource: portraitResult,
       runIdForHistory: currentRunId,
+      resetDownstream: false,
     })
   }
 
@@ -1094,8 +1648,232 @@ function App() {
     }
   }
 
+  const handleGenerateStep03 = async () => {
+    if (!canRunStep03Generation) {
+      return
+    }
+
+    setError('')
+    resetPipelineFromStep(3)
+    setSpriteResult(null)
+    setIsCreatingModel(true)
+
+    try {
+      const modelTask = await createTripoTask({
+        views: {
+          front: multiviewResult.views.front.imageDataUrl,
+          back: multiviewResult.views.back.imageDataUrl,
+          left: multiviewResult.views.left.imageDataUrl,
+          right: multiviewResult.views.right.imageDataUrl,
+        },
+        meshQuality: devSettings.tripoMeshQuality,
+        textureQuality: devSettings.tripoTextureQuality,
+      })
+      if (!modelTask?.taskId) {
+        throw new Error('Failed to start 3D model generation task.')
+      }
+      setModelPreviewMode('apose')
+      applyTripoTaskStart(modelTask, {
+        animationMode: 'static',
+        fallbackTaskType: 'multiview_to_model',
+      })
+
+      const completedModelTask = await waitForTripoTaskSuccess(modelTask.taskId, 'static')
+      if (!completedModelTask?.taskId) {
+        throw new Error('3D model generation did not return a valid task id.')
+      }
+
+      setIsCreatingModel(false)
+      setIsCreatingRigTask(true)
+      await waitForDelay(MODEL_CHAIN_STAGE_DELAY_MS)
+
+      const rigTask = await createTripoRigTask(completedModelTask.taskId)
+      if (!rigTask?.taskId) {
+        throw new Error('Failed to start rig generation task.')
+      }
+      applyTripoTaskStart(rigTask, {
+        animationMode: 'static',
+        fallbackTaskType: 'animate_rig',
+        fallbackSourceTaskId: completedModelTask.taskId,
+      })
+
+      const completedRigTask = await waitForTripoTaskSuccess(rigTask.taskId, 'static')
+      if (!completedRigTask?.taskId) {
+        throw new Error('Rig generation did not return a valid task id.')
+      }
+
+      setIsCreatingRigTask(false)
+      setIsCreatingRetargetTask(true)
+      await waitForDelay(MODEL_CHAIN_STAGE_DELAY_MS)
+
+      const retargetTask = await createTripoRetargetTask(completedRigTask.taskId, {
+        animationName: String(devSettings.tripoRetargetAnimationName || '').trim(),
+      })
+      if (!retargetTask?.taskId) {
+        throw new Error('Failed to start animation task.')
+      }
+      setModelPreviewMode('animated')
+      applyTripoTaskStart(retargetTask, {
+        animationMode: 'animated',
+        fallbackTaskType: 'animate_retarget',
+        fallbackSourceTaskId: completedRigTask.taskId,
+      })
+
+      await waitForTripoTaskSuccess(retargetTask.taskId, 'animated')
+    } catch (requestError) {
+      setError(sanitizeProviderNames(requestError?.message || 'Failed to complete 3D generation.'))
+    } finally {
+      setIsCreatingModel(false)
+      setIsCreatingRigTask(false)
+      setIsCreatingRetargetTask(false)
+    }
+  }
+
+  const handleAcceptStep03 = () => {
+    if (!canApproveStep03) {
+      return
+    }
+
+    setError('')
+    updatePipelineState((nextState) => {
+      nextState.approved.step3 = true
+      nextState.unlocked.step4 = true
+    })
+  }
+
+  const handleGenerateStep04 = async () => {
+    if (!canRunStep04Generation) {
+      return
+    }
+
+    setError('')
+    resetPipelineFromStep(4)
+    setIsGeneratingSprite(true)
+    setIsCapturingWalkSprites(true)
+    const captureSize = normalizeSpriteSize(devSettings.spriteSize)
+
+    try {
+      const captureApi = viewerCaptureApiRef.current
+      if (!captureApi?.captureAnimatedSpriteDirections) {
+        throw new Error('3D viewer is not ready for animated sprite capture yet.')
+      }
+
+      if (!activeModelUrl) {
+        throw new Error('Load an animated model before capturing walk sprites.')
+      }
+
+      const capturedDirections = await captureApi.captureAnimatedSpriteDirections()
+      const nextDirections = await buildViewerWalkDirections(capturedDirections, captureSize)
+      const fallback360Direction =
+        resolveSpriteDirection(activeSpriteDirections, 'view_360') ||
+        buildDefaultSpriteDirections(defaultSpritesCacheKey).view_360
+      const mergedDirections =
+        fallback360Direction && hasUsableSpriteDirection(fallback360Direction)
+          ? {
+              ...nextDirections,
+              view_360: fallback360Direction,
+            }
+          : nextDirections
+
+      setDevSettings((currentValue) => ({
+        ...currentValue,
+        defaultSpritesEnabled: false,
+      }))
+      setSpriteResult({
+        animation: 'walk',
+        spriteSize: captureSize,
+        directions: mergedDirections,
+      })
+    } catch (requestError) {
+      setError(sanitizeProviderNames(requestError?.message || 'Failed to capture animated walk sprites.'))
+    } finally {
+      setIsGeneratingSprite(false)
+      setIsCapturingWalkSprites(false)
+    }
+  }
+
+  const handleDownloadFinalBundle = async () => {
+    if (!canDownloadFinalBundle) {
+      return
+    }
+
+    setError('')
+    setIsPreparingDownloadBundle(true)
+
+    try {
+      if (!portraitResult?.imageDataUrl) {
+        throw new Error('Portrait output is missing for download.')
+      }
+
+      if (!hasCompleteTurnaround(multiviewResult?.views)) {
+        throw new Error('Multiview output is missing for download.')
+      }
+
+      if (!activeDownloadUrl) {
+        throw new Error('3D model output is missing for download.')
+      }
+
+      if (!hasRequiredSpriteBundle(spriteResult)) {
+        throw new Error('Sprite output is incomplete for download.')
+      }
+
+      const zip = new JSZip()
+      const portraitFolder = zip.folder('01_Portrait')
+      const multiviewFolder = zip.folder('02_Multiview')
+      const modelFolder = zip.folder('03_3DModel')
+      const spritesFolder = zip.folder('04_Sprites')
+
+      const portraitBase64 = dataUrlToBase64Payload(portraitResult.imageDataUrl)
+      if (!portraitBase64) {
+        throw new Error('Portrait output is invalid for download.')
+      }
+      const portraitExtension = getDataUrlFileExtension(portraitResult.imageDataUrl)
+      portraitFolder?.file(`portrait.${portraitExtension}`, portraitBase64, { base64: true })
+      if (prompt.trim()) {
+        portraitFolder?.file('prompt.txt', prompt.trim())
+      }
+
+      for (const directionKey of MULTIVIEW_ORDER) {
+        const directionDataUrl = String(multiviewResult?.views?.[directionKey]?.imageDataUrl || '').trim()
+        const directionBase64 = dataUrlToBase64Payload(directionDataUrl)
+        if (!directionBase64) {
+          throw new Error(`Multiview output is missing: ${directionKey}.`)
+        }
+        const directionExtension = getDataUrlFileExtension(directionDataUrl)
+        multiviewFolder?.file(`${directionKey}.${directionExtension}`, directionBase64, { base64: true })
+      }
+
+      const modelResponse = await fetch(activeDownloadUrl)
+      if (!modelResponse.ok) {
+        throw new Error('Failed to fetch 3D model output for download.')
+      }
+      const modelBlob = await modelResponse.blob()
+      modelFolder?.file(`${tripoJob.taskId || 'model'}.glb`, modelBlob)
+
+      for (const directionKey of SPRITE_REQUIRED_KEYS) {
+        const direction = resolveSpriteDirection(spriteResult?.directions, directionKey)
+        const directionBlob = await buildDirectionGifBlob(direction, Number(spriteResult?.spriteSize) || 64)
+        spritesFolder?.file(`${directionKey}.gif`, directionBlob)
+      }
+
+      const bundleBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 },
+      })
+      const runSuffix = currentRunId || tripoJob.taskId || Date.now()
+      downloadBlob(bundleBlob, `ww-character-${runSuffix}.zip`)
+    } catch (requestError) {
+      setError(sanitizeProviderNames(requestError?.message || 'Failed to prepare final bundle download.'))
+    } finally {
+      setIsPreparingDownloadBundle(false)
+    }
+  }
+
   const handleAnimateRig = async () => {
-    if (!tripoJob.taskId) {
+    const sourceTaskId = resolvedAnimateRigTaskId
+
+    if (!sourceTaskId) {
       setError('Create a mesh task before starting rigging.')
       return
     }
@@ -1104,17 +1882,42 @@ function App() {
     setIsCreatingRigTask(true)
 
     try {
-      const result = await createTripoRigTask(tripoJob.taskId)
+      const result = await createTripoRigTask(sourceTaskId)
       setModelPreviewMode('apose')
       applyTripoTaskStart(result, {
         animationMode: 'static',
         fallbackTaskType: 'animate_rig',
-        fallbackSourceTaskId: tripoJob.taskId,
+        fallbackSourceTaskId: sourceTaskId,
       })
     } catch (requestError) {
       setError(requestError.message)
     } finally {
       setIsCreatingRigTask(false)
+    }
+  }
+
+  const handlePreRigCheck = async () => {
+    const sourceTaskId = resolvedAnimateRigTaskId
+
+    if (!sourceTaskId) {
+      setError('Load a source task id before running pre-rig-check.')
+      return
+    }
+
+    setError('')
+    setIsCreatingPreRigCheckTask(true)
+
+    try {
+      const result = await createTripoPreRigCheckTask(sourceTaskId)
+      applyTripoTaskStart(result, {
+        animationMode: 'static',
+        fallbackTaskType: 'animate_prerigcheck',
+        fallbackSourceTaskId: sourceTaskId,
+      })
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setIsCreatingPreRigCheckTask(false)
     }
   }
 
@@ -1439,22 +2242,30 @@ function App() {
     <div className="page-shell">
       <div className="page-backdrop" aria-hidden="true" />
       <main className="workspace-shell">
-        <header className="status-bar">
-          <div className="status-bar__account">
-            <span className="status-dot" aria-hidden="true" />
-            <p className="status-bar__inline">
-              <span className="status-bar__label">Session:</span> Local workspace
-            </p>
-          </div>
-          <div className="status-bar__message">
-            <p className="status-bar__inline">
-              <span className="status-bar__label">Status:</span> {currentPipelineState}
-            </p>
-          </div>
-          <div className="status-bar__metric">
-            <p className="status-bar__inline">
-              <span className="status-bar__label">Message:</span> {topBarMessage}
-            </p>
+        <header className="status-bar status-progress" aria-label="Pipeline progress">
+          <div
+            className="status-progress__track"
+            ref={statusProgressTrackRef}
+            role="progressbar"
+            aria-label="Pipeline step progress"
+            aria-valuemin={1}
+            aria-valuemax={4}
+            aria-valuenow={currentStepIndex}
+          >
+            <div
+              className="status-progress__fill"
+              style={{ width: progressFillWidth }}
+              data-testid="status-progress-fill"
+              data-step-index={currentStepIndex}
+            />
+            <div className="status-progress__content">
+              <p className="status-progress__inline status-progress__inline--left">
+                <span className="status-progress__label">Status:</span> {currentPipelineState}
+              </p>
+              <p className="status-progress__inline status-progress__inline--right">
+                <span className="status-progress__label">Message:</span> {topBarMessage}
+              </p>
+            </div>
           </div>
         </header>
 
@@ -1462,6 +2273,7 @@ function App() {
           <section
             className="panel-card workspace-slot workspace-slot--portrait workspace-portrait"
             aria-label="Step 01 Portrait Panel"
+            ref={step01PanelRef}
           >
             <div className="panel-heading-shell">
               <div className="section-heading">
@@ -1480,13 +2292,17 @@ function App() {
                 onGeneratePortrait={handleGeneratePortrait}
                 onAccept={handleAcceptPortrait}
                 isGeneratingPortrait={isGeneratingPortrait}
-                isAcceptDisabled={!canAcceptPortrait}
+                isAcceptDisabled={!canApproveStep01}
               />
             </div>
           </section>
 
           <section className="panel-card workspace-stage" aria-label="Center Stage Panel">
-            <section className="workspace-stage__multiview" aria-label="Step 02 Multiview Panel">
+            <section
+              className="workspace-stage__multiview"
+              aria-label="Step 02 Multiview Panel"
+              ref={step02PanelRef}
+            >
               <div className="panel-heading-shell">
                 <div className="section-heading">
                   <p className="step-label">Step 02</p>
@@ -1504,17 +2320,17 @@ function App() {
                 <button
                   type="button"
                   className="primary-button"
-                  disabled={!canCreateModel || isCreatingModel}
-                  onClick={handleCreateModel}
+                  disabled={!canRunStep02Generation}
+                  onClick={handleGenerateStep02}
                 >
-                  {isCreatingModel ? 'Generating 2D...' : 'Generate 2D'}
+                  {turnaroundGenerationMode ? 'Generating 2D...' : 'Generate 2D'}
                 </button>
                 <button
                   type="button"
                   className="accept-button accept-button--icon-only"
-                  disabled={!canCreateFrontBackModel || isCreatingFrontBackModel}
-                  onClick={handleCreateFrontBackModel}
-                  aria-label={isCreatingFrontBackModel ? 'Accepting Multiview' : 'Accept Multiview'}
+                  disabled={!canApproveStep02}
+                  onClick={handleAcceptStep02}
+                  aria-label="Accept Multiview"
                 >
                   <span className="accept-button__icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -1532,11 +2348,30 @@ function App() {
               </div>
             </section>
 
-            <section className="workspace-stage__model" aria-label="Step 03 3D Model Panel">
+            <section
+              className="workspace-stage__model"
+              aria-label="Step 03 3D Model Panel"
+              ref={step03BoundaryRef}
+            >
               <div className="panel-heading-shell">
                 <div className="section-heading">
                   <p className="step-label">Step 03</p>
                   <h2>3D Model</h2>
+                </div>
+                <div className="panel-heading-control">
+                  <label className="visually-hidden" htmlFor="step03-animation-select">
+                    3D model animation preview
+                  </label>
+                  <select
+                    id="step03-animation-select"
+                    className="panel-heading-select"
+                    value={modelPreviewMode}
+                    onChange={(event) => setModelPreviewMode(event.target.value)}
+                    aria-label="3D model animation preview"
+                  >
+                    <option value="apose">A-pose</option>
+                    <option value="animated">Walk</option>
+                  </select>
                 </div>
               </div>
               <div className="workspace-viewer__viewport">
@@ -1556,7 +2391,7 @@ function App() {
                   </Suspense>
                 ) : (
                   <div className="viewer-placeholder">
-                    <p>The textured GLB appears here after Tripo completes.</p>
+                    <p>Model will appear when ready.</p>
                   </div>
                 )}
               </div>
@@ -1564,17 +2399,17 @@ function App() {
                 <button
                   type="button"
                   className="primary-button"
-                  disabled={!canCreateModel || isCreatingModel}
-                  onClick={handleCreateModel}
+                  disabled={!canRunStep03Generation}
+                  onClick={handleGenerateStep03}
                 >
                   {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
                 </button>
                 <button
                   type="button"
                   className="accept-button accept-button--icon-only"
-                  disabled={!canCreateFrontBackModel || isCreatingFrontBackModel}
-                  onClick={handleCreateFrontBackModel}
-                  aria-label={isCreatingFrontBackModel ? 'Accepting' : 'Accept'}
+                  disabled={!canApproveStep03}
+                  onClick={handleAcceptStep03}
+                  aria-label="Accept 3D"
                 >
                   <span className="accept-button__icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -1602,38 +2437,45 @@ function App() {
                 <p className="step-label">Step 04</p>
                 <h2>Sprite</h2>
               </div>
+              <div className="panel-heading-control">
+                <label className="visually-hidden" htmlFor="step04-sprite-view-select">
+                  Sprite animation preview
+                </label>
+                <select
+                  id="step04-sprite-view-select"
+                  className="panel-heading-select"
+                  value={resolvedSpritePreviewMode}
+                  onChange={(event) => setSpritePreviewMode(event.target.value)}
+                  aria-label="Sprite animation preview"
+                >
+                  <option value="view_360">360</option>
+                  <option value="walk_8">8-direction walk</option>
+                </select>
+              </div>
             </div>
             <div className="workspace-sprite__body">
-              <SpriteGrid directions={activeSpriteDirections} embedded />
+              <SpriteGrid
+                directions={activeSpriteDirections}
+                displayMode={resolvedSpritePreviewMode}
+                embedded
+              />
             </div>
             <div className="action-row action-row--compact">
               <button
                 type="button"
                 className="primary-button"
-                disabled={!canCreateModel || isCreatingModel}
-                onClick={handleCreateModel}
+                disabled={!canRunStep04Generation}
+                onClick={handleGenerateStep04}
               >
-                {isCreatingModel ? 'Generating 2.5D...' : 'Generate 2.5D'}
+                {isGeneratingSprite || isCapturingWalkSprites ? 'Generating 2.5D...' : 'Generate 2.5D'}
               </button>
               <button
                 type="button"
-                className="accept-button accept-button--icon-only"
-                disabled={!canCreateFrontBackModel || isCreatingFrontBackModel}
-                onClick={handleCreateFrontBackModel}
-                aria-label={isCreatingFrontBackModel ? 'Accepting Sprite' : 'Accept Sprite'}
+                className="secondary-button"
+                disabled={!canDownloadFinalBundle}
+                onClick={handleDownloadFinalBundle}
               >
-                <span className="accept-button__icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                    <path
-                      d="M6.5 12.5 10.5 16.5 18 8.8"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
+                {isPreparingDownloadBundle ? 'Preparing...' : 'Download'}
               </button>
             </div>
           </section>
@@ -1884,6 +2726,12 @@ function App() {
                     ? `Task ${tripoJob.taskId}${tripoJob.progress ? ` - ${tripoJob.progress}%` : ''}`
                     : 'No Tripo job has started yet.'}
                 </p>
+                {tripoJob.taskType === 'animate_prerigcheck' ? (
+                  <>
+                    <p>PreRigCheck riggable: {preRigCheckRiggableLabel}</p>
+                    <p>PreRigCheck rig type: {preRigCheckResult?.rigType || 'unknown'}</p>
+                  </>
+                ) : null}
                 {tripoJob.error ? <p className="error-copy">{tripoJob.error}</p> : null}
               </div>
               <label className="dev-panel__field">
@@ -1903,6 +2751,15 @@ function App() {
                   value={existingTripoTaskIdInput}
                   placeholder="Paste image_to_model / multiview_to_model / rig / retarget task id"
                   onChange={(event) => setExistingTripoTaskIdInput(event.target.value)}
+                />
+              </label>
+              <label className="dev-panel__field">
+                <span>Animate Rig Task ID (Optional)</span>
+                <input
+                  type="text"
+                  value={animateRigTaskIdInput}
+                  placeholder="Leave empty to use current loaded task id"
+                  onChange={(event) => setAnimateRigTaskIdInput(event.target.value)}
                 />
               </label>
               <div className="action-row action-row--compact action-row--dev">
@@ -1939,6 +2796,14 @@ function App() {
                   onClick={handleCreateFrontModel}
                 >
                   {isCreatingFrontModel ? 'Submitting 3D Front...' : '3D Front'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!resolvedAnimateRigTaskId || isCreatingPreRigCheckTask}
+                  onClick={handlePreRigCheck}
+                >
+                  {isCreatingPreRigCheckTask ? 'Submitting PreRigCheck...' : 'PreRigCheck'}
                 </button>
                 <button
                   type="button"
