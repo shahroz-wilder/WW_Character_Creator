@@ -138,6 +138,21 @@ orthographic, neutral A-pose, light grey seamless background, sharp focus, No we
     )
   })
 
+  it('preserves persisted dev pbr overrides', () => {
+    window.localStorage.setItem(
+      'ww-character-session-v1',
+      JSON.stringify({
+        devSettings: {
+          tripoPbr: false,
+        },
+      }),
+    )
+
+    const session = loadPersistedSession()
+
+    expect(session?.devSettings?.tripoPbr).toBe(false)
+  })
+
   it('preserves bundled multi-animation clip metadata in persisted tripo outputs', () => {
     window.localStorage.setItem(
       'ww-character-session-v1',

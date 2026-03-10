@@ -10,6 +10,7 @@ export const createTripoRouter = ({ tripoService }) => {
         animationMode: req.body?.animationMode,
         meshQuality: req.body?.meshQuality,
         textureQuality: req.body?.textureQuality,
+        pbr: req.body?.pbr,
         faceLimit: req.body?.faceLimit,
       })
       res.json(result)
@@ -25,6 +26,7 @@ export const createTripoRouter = ({ tripoService }) => {
         animationMode: req.body?.animationMode,
         meshQuality: req.body?.meshQuality,
         textureQuality: req.body?.textureQuality,
+        pbr: req.body?.pbr,
         faceLimit: req.body?.faceLimit,
       })
       res.json(result)
@@ -40,6 +42,7 @@ export const createTripoRouter = ({ tripoService }) => {
         animationMode: req.body?.animationMode,
         meshQuality: req.body?.meshQuality,
         textureQuality: req.body?.textureQuality,
+        pbr: req.body?.pbr,
         faceLimit: req.body?.faceLimit,
       })
       res.json(result)

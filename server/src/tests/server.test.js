@@ -420,6 +420,48 @@ describe('multiview route', () => {
 })
 
 describe('tripo route', () => {
+  it('passes pbr through the task creation route', async () => {
+    const tripoService = {
+      ...noopTripoService,
+      createTaskFromViews: vi.fn().mockResolvedValue({
+        taskId: 'model-task',
+        taskType: 'multiview_to_model',
+        status: 'queued',
+      }),
+    }
+    const app = createApp(TEST_CONFIG, {
+      portraitService: { generatePortrait: vi.fn() },
+      multiviewService: noopMultiviewService,
+      tripoService,
+      spriteService: noopSpriteService,
+    })
+
+    const response = await request(app)
+      .post('/api/tripo/tasks')
+      .send({
+        views: {
+          front: 'data:image/png;base64,Zm9v',
+          back: 'data:image/png;base64,YmFy',
+          left: 'data:image/png;base64,YmF6',
+          right: 'data:image/png;base64,cXV4',
+        },
+        pbr: false,
+      })
+
+    expect(response.status).toBe(200)
+    expect(tripoService.createTaskFromViews).toHaveBeenCalledWith(
+      {
+        front: 'data:image/png;base64,Zm9v',
+        back: 'data:image/png;base64,YmFy',
+        left: 'data:image/png;base64,YmF6',
+        right: 'data:image/png;base64,cXV4',
+      },
+      expect.objectContaining({
+        pbr: false,
+      }),
+    )
+  })
+
   it('accepts multi-animation retarget payloads', async () => {
     const tripoService = {
       ...noopTripoService,
@@ -611,6 +653,31 @@ describe('sprite route', () => {
     )
   })
 
+  it('accepts valid payload with spriteSize 256', async () => {
+    const { app, spriteService } = createSpriteApp()
+    const viewDataUrl = await makeDataUrl()
+
+    const response = await request(app)
+      .post('/api/sprites/run')
+      .send({
+        views: {
+          front: viewDataUrl,
+          back: viewDataUrl,
+          left: viewDataUrl,
+          right: viewDataUrl,
+        },
+        spriteSize: 256,
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.spriteSize).toBe(256)
+    expect(spriteService.generateRunSprites).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spriteSize: 256,
+      }),
+    )
+  })
+
   it('accepts valid payload with spriteSize 84', async () => {
     const { app, spriteService } = createSpriteApp()
     const viewDataUrl = await makeDataUrl()
@@ -664,7 +731,7 @@ describe('sprite route', () => {
       })
 
     expect(response.status).toBe(400)
-    expect(response.body.error).toMatch(/Sprite size must be one of: 64, 84, 128/i)
+    expect(response.body.error).toMatch(/Sprite size must be one of: 64, 84, 128, 256/i)
   })
 })
 
@@ -776,6 +843,59 @@ describe('tripoService', () => {
     const requestPayload = createMultiviewTask.mock.calls[0][0]
     expect(requestPayload.options.geometry_quality).toBe('detailed')
     expect(requestPayload.options.texture_quality).toBe('detailed')
+  })
+
+  it('passes pbr overrides through to Tripo generation options', async () => {
+    const makeDataUrl = async (color) => {
+      const buffer = await sharp({
+        create: {
+          width: 1,
+          height: 1,
+          channels: 3,
+          background: color,
+        },
+      })
+        .png()
+        .toBuffer()
+
+      return `data:image/png;base64,${buffer.toString('base64')}`
+    }
+
+    const uploadImageBuffer = vi
+      .fn()
+      .mockResolvedValueOnce({ file_token: 'front-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'left-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'back-token', type: 'jpg' })
+      .mockResolvedValueOnce({ file_token: 'right-token', type: 'jpg' })
+    const createMultiviewTask = vi.fn().mockResolvedValue('task-pbr-override-1')
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer,
+        createMultiviewTask,
+        createImageTask: vi.fn(),
+        getTask: vi.fn(),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoPbr: true,
+      },
+    })
+
+    await tripoService.createTaskFromViews(
+      {
+        front: await makeDataUrl({ r: 255, g: 0, b: 0 }),
+        back: await makeDataUrl({ r: 0, g: 255, b: 0 }),
+        left: await makeDataUrl({ r: 0, g: 0, b: 255 }),
+        right: await makeDataUrl({ r: 255, g: 255, b: 0 }),
+      },
+      {
+        pbr: false,
+      },
+    )
+
+    const requestPayload = createMultiviewTask.mock.calls[0][0]
+    expect(requestPayload.options.pbr).toBe(false)
   })
 
   it('passes uncapped face_limit without smart_low_poly', async () => {

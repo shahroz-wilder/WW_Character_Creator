@@ -8,7 +8,7 @@ export const createSpriteRouter = ({ spriteService }) => {
     try {
       const result = await spriteService.generateRunSprites({
         views: req.body?.views,
-        spriteSize: req.body?.spriteSize ?? 64,
+        spriteSize: req.body?.spriteSize ?? 128,
       })
 
       res.json(result)

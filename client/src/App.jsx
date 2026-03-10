@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import JSZip from 'jszip'
 import {
   createTripoFrontBackTask,
@@ -54,13 +55,21 @@ const ModelViewer = lazy(() =>
   import('./components/ModelViewer').then((module) => ({ default: module.ModelViewer })),
 )
 
+const DEFAULT_RETARGET_ANIMATION_INPUT = 'preset:biped:walk preset:biped:run'
+const AUTO_STEP03_MESH_QUALITY = 'detailed'
+const AUTO_STEP03_TEXTURE_QUALITY = 'detailed'
+const AUTO_STEP03_FACE_LIMIT = 64000
+const AUTO_PIPELINE_POLL_TIMEOUT_MS = 300000
+
 const DEV_PRESETS = {
   portraitAspectRatio: '1:1',
   portraitPreset:
     'Character identity portrait front with torso and head in frame centered framing, Grey seamless background, no cape, no weapon',
   multiviewPreset: DEFAULT_MULTIVIEW_PROMPT,
-  spriteSize: 64,
+  spriteSize: 128,
   tripoAnimationMode: 'static',
+  tripoPbr: true,
+  tripoRetargetAnimations: DEFAULT_RETARGET_ANIMATION_INPUT,
   tripoRetargetAnimationName: '',
   tripoMeshQuality: 'standard',
   tripoTextureQuality: 'standard',
@@ -83,7 +92,7 @@ const MODEL_VIEW_CAPTURE_SIZE = 128
 const MODEL_VIEW_CROP_MARGIN_RATIO = 0.06
 const MODEL_VIEW_ALPHA_THRESHOLD = 1
 const MODEL_VIEW_PIXEL_ART_MODE = true
-const VALID_SPRITE_SIZES = new Set([64, 84, 128])
+const VALID_SPRITE_SIZES = new Set([64, 84, 128, 256])
 const TRIPO_QUALITY_LABELS = {
   standard: 'Standard',
   detailed: 'Ultra',
@@ -114,17 +123,19 @@ const STEP03_PREVIEW_OPTIONS = Object.freeze([
 const ANIMATION_PREVIEW_OPTIONS = Object.freeze(
   STEP03_PREVIEW_OPTIONS.filter((option) => option.isAnimated),
 )
-const ANIMATION_PREVIEW_KEYS = Object.freeze(
-  ANIMATION_PREVIEW_OPTIONS.map((option) => option.key),
+const APOSE_PREVIEW_OPTION = Object.freeze(
+  STEP03_PREVIEW_OPTIONS.find((option) => !option.isAnimated) || {
+    key: 'apose',
+    label: 'A-pose',
+    preset: '',
+    isAnimated: false,
+  },
+)
+const ANIMATION_PREVIEW_OPTION_BY_KEY = Object.freeze(
+  Object.fromEntries(ANIMATION_PREVIEW_OPTIONS.map((option) => [option.key, option])),
 )
 const SPRITE_360_PREVIEW_KEY = 'view_360'
-const SPRITE_PREVIEW_OPTIONS = Object.freeze([
-  { key: SPRITE_360_PREVIEW_KEY, label: '360' },
-  ...ANIMATION_PREVIEW_OPTIONS.map((option) => ({
-    key: option.key,
-    label: option.label,
-  })),
-])
+const SPRITE_360_PREVIEW_OPTION = Object.freeze({ key: SPRITE_360_PREVIEW_KEY, label: '360' })
 const ANIMATION_PRESET_BY_KEY = Object.freeze(
   Object.fromEntries(ANIMATION_PREVIEW_OPTIONS.map((option) => [option.key, option.preset])),
 )
@@ -143,10 +154,6 @@ const ANIMATION_KEY_BY_PRESET = Object.freeze(
     return lookup
   }, {}),
 )
-const FIXED_RETARGET_ANIMATIONS = Object.freeze(
-  ANIMATION_PREVIEW_OPTIONS.map((option) => option.preset),
-)
-const DEFAULT_ANIMATED_PREVIEW_KEY = 'idle'
 const DEFAULT_SPRITE_PREVIEW_KEY = SPRITE_360_PREVIEW_KEY
 const LEGACY_ANIMATED_PREVIEW_KEY = 'walk'
 const DEFAULT_PROGRESS_BOUNDARIES = Object.freeze([0.2, 0.34, 0.8, 1])
@@ -495,13 +502,62 @@ const normalizeRequestedAnimations = (value) => {
   return normalizedValues
 }
 
+const parseAnimationPresetInput = (value) => {
+  const sourceValues = Array.isArray(value)
+    ? value
+    : String(value || '')
+        .split(/[\s,;]+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+
+  return normalizeRequestedAnimations(sourceValues)
+}
+
+const resolveConfiguredRetargetAnimations = (
+  value,
+  fallbackValue = DEFAULT_RETARGET_ANIMATION_INPUT,
+) => {
+  const requestedAnimations = parseAnimationPresetInput(value).filter((animationPreset) =>
+    Boolean(getAnimationKeyFromPreset(animationPreset)),
+  )
+  return requestedAnimations.length > 0
+    ? requestedAnimations
+    : parseAnimationPresetInput(fallbackValue).filter((animationPreset) =>
+        Boolean(getAnimationKeyFromPreset(animationPreset)),
+      )
+}
+
+const resolveAnimationPreviewKeysFromPresets = (
+  value,
+  fallbackValue = DEFAULT_RETARGET_ANIMATION_INPUT,
+) => {
+  const requestedKeys = parseAnimationPresetInput(value)
+    .map((animationPreset) => getAnimationKeyFromPreset(animationPreset))
+    .filter(Boolean)
+
+  if (requestedKeys.length > 0) {
+    return Array.from(new Set(requestedKeys))
+  }
+
+  const fallbackKeys = parseAnimationPresetInput(fallbackValue)
+    .map((animationPreset) => getAnimationKeyFromPreset(animationPreset))
+    .filter(Boolean)
+
+  return Array.from(new Set(fallbackKeys))
+}
+
+const buildAnimationPreviewOptions = (animationKeys = []) =>
+  Array.from(new Set(Array.isArray(animationKeys) ? animationKeys : []))
+    .map((animationKey) => ANIMATION_PREVIEW_OPTION_BY_KEY[animationKey] || null)
+    .filter(Boolean)
+
 const normalizeAnimationPreviewKey = (value, fallback = 'apose') => {
   const normalizedValue = String(value || '').trim().toLowerCase()
   if (normalizedValue === 'apose') {
     return 'apose'
   }
 
-  return STEP03_PREVIEW_OPTIONS.some((option) => option.key === normalizedValue)
+  return Boolean(ANIMATION_PREVIEW_OPTION_BY_KEY[normalizedValue])
     ? normalizedValue
     : fallback
 }
@@ -514,7 +570,7 @@ const resolveSingleAnimationPreviewKey = (
 ) => {
   const normalizedValue = String(value || '').trim()
   if (!normalizedValue) {
-    return DEFAULT_ANIMATED_PREVIEW_KEY
+    return fallback
   }
 
   return getAnimationKeyFromPreset(normalizedValue) || fallback
@@ -525,11 +581,27 @@ const resolveLegacyAnimationOutputKey = (job) => {
     .map((animationPreset) => getAnimationKeyFromPreset(animationPreset))
     .filter(Boolean)
 
-  if (requestedAnimationKeys.includes(DEFAULT_ANIMATED_PREVIEW_KEY)) {
-    return DEFAULT_ANIMATED_PREVIEW_KEY
+  return requestedAnimationKeys[0] || LEGACY_ANIMATED_PREVIEW_KEY
+}
+
+const getExpectedAnimationOutputKeys = (
+  job,
+  fallbackAnimationPresets = DEFAULT_RETARGET_ANIMATION_INPUT,
+) => {
+  const requestedAnimationKeys = normalizeRequestedAnimations(job?.requestedAnimations)
+    .map((animationPreset) => getAnimationKeyFromPreset(animationPreset))
+    .filter(Boolean)
+
+  if (requestedAnimationKeys.length > 0) {
+    return Array.from(new Set(requestedAnimationKeys))
   }
 
-  return requestedAnimationKeys[0] || LEGACY_ANIMATED_PREVIEW_KEY
+  const animationCatalogKeys = getAnimationCatalogKeys(getAnimationOutputCatalog(job))
+  if (animationCatalogKeys.length > 0) {
+    return animationCatalogKeys
+  }
+
+  return resolveAnimationPreviewKeysFromPresets(fallbackAnimationPresets, fallbackAnimationPresets)
 }
 
 const getAnimationOutputCatalog = (job) => {
@@ -577,19 +649,26 @@ const hasUsableAnimationOutput = (entry) =>
       (entry?.variants && typeof entry.variants === 'object' && Object.keys(entry.variants).length > 0),
   )
 
-const getAvailableAnimationOutputKeys = (job) => {
+const getAnimationCatalogKeys = (animationCatalog) =>
+  Object.keys(animationCatalog || {}).filter((animationKey) => Boolean(ANIMATION_PREVIEW_OPTION_BY_KEY[animationKey]))
+
+const getAvailableAnimationOutputKeys = (
+  job,
+  fallbackAnimationPresets = DEFAULT_RETARGET_ANIMATION_INPUT,
+) => {
   const animationCatalog = getAnimationOutputCatalog(job)
-  return ANIMATION_PREVIEW_KEYS.filter((animationKey) =>
+  const candidateAnimationKeys = getExpectedAnimationOutputKeys(job, fallbackAnimationPresets)
+
+  return candidateAnimationKeys.filter((animationKey) =>
     hasUsableAnimationOutput(animationCatalog?.[animationKey]),
   )
 }
 
-const resolvePreferredAnimatedPreviewKey = (job) => {
-  const availableAnimationKeys = getAvailableAnimationOutputKeys(job)
-  if (availableAnimationKeys.includes(DEFAULT_ANIMATED_PREVIEW_KEY)) {
-    return DEFAULT_ANIMATED_PREVIEW_KEY
-  }
-
+const resolvePreferredAnimatedPreviewKey = (
+  job,
+  fallbackAnimationPresets = DEFAULT_RETARGET_ANIMATION_INPUT,
+) => {
+  const availableAnimationKeys = getAvailableAnimationOutputKeys(job, fallbackAnimationPresets)
   return availableAnimationKeys[0] || ''
 }
 
@@ -684,20 +763,28 @@ const resolveSharedSpriteDirections = (spritePayload) => {
     return spritePayload.sharedDirections
   }
 
-  const idleDirections = resolveSpriteAnimationDirections(spritePayload, DEFAULT_ANIMATED_PREVIEW_KEY)
-  const legacyDirections =
-    spritePayload?.directions && typeof spritePayload.directions === 'object'
-      ? spritePayload.directions
-      : null
-  const shared360Direction =
-    resolveSpriteDirection(idleDirections, SPRITE_360_PREVIEW_KEY) ||
-    resolveSpriteDirection(legacyDirections, SPRITE_360_PREVIEW_KEY)
+  const directionCandidates = []
+  if (spritePayload?.animations && typeof spritePayload.animations === 'object') {
+    directionCandidates.push(
+      ...Object.values(spritePayload.animations)
+        .map((entry) => entry?.directions || null)
+        .filter(Boolean),
+    )
+  }
+  if (spritePayload?.directions && typeof spritePayload.directions === 'object') {
+    directionCandidates.push(spritePayload.directions)
+  }
 
-  return shared360Direction
-    ? {
+  for (const directions of directionCandidates) {
+    const shared360Direction = resolveSpriteDirection(directions, SPRITE_360_PREVIEW_KEY)
+    if (shared360Direction) {
+      return {
         [SPRITE_360_PREVIEW_KEY]: shared360Direction,
       }
-    : null
+    }
+  }
+
+  return null
 }
 
 const hasRequiredSpriteDirections = (directions) => {
@@ -715,22 +802,96 @@ const hasSharedSpritePreview = (spritePayload) =>
     resolveSpriteDirection(resolveSharedSpriteDirections(spritePayload), SPRITE_360_PREVIEW_KEY),
   )
 
-const getAvailableSpriteAnimationKeys = (spritePayload) =>
-  ANIMATION_PREVIEW_KEYS.filter((animationKey) =>
+const getExpectedSpriteAnimationKeys = (spritePayload, fallbackAnimationKeys = []) => {
+  const spriteAnimationKeys = getAnimationCatalogKeys(spritePayload?.animations)
+  if (spriteAnimationKeys.length > 0) {
+    return spriteAnimationKeys
+  }
+
+  return Array.from(
+    new Set(
+      (Array.isArray(fallbackAnimationKeys) ? fallbackAnimationKeys : []).filter((animationKey) =>
+        Boolean(ANIMATION_PREVIEW_OPTION_BY_KEY[animationKey]),
+      ),
+    ),
+  )
+}
+
+const getAvailableSpriteAnimationKeys = (spritePayload, fallbackAnimationKeys = []) =>
+  getExpectedSpriteAnimationKeys(spritePayload, fallbackAnimationKeys).filter((animationKey) =>
     hasRequiredSpriteDirections(resolveSpriteAnimationDirections(spritePayload, animationKey)),
   )
 
-const getAvailableSpritePreviewKeys = (spritePayload) => [
+const getAvailableSpritePreviewKeys = (spritePayload, fallbackAnimationKeys = []) => [
   ...(hasSharedSpritePreview(spritePayload) ? [SPRITE_360_PREVIEW_KEY] : []),
-  ...getAvailableSpriteAnimationKeys(spritePayload),
+  ...getAvailableSpriteAnimationKeys(spritePayload, fallbackAnimationKeys),
 ]
 
-const hasRequiredSpriteBundle = (spritePayload) =>
-  hasSharedSpritePreview(spritePayload) &&
-  ANIMATION_PREVIEW_KEYS.every((animationKey) =>
-    hasRequiredSpriteDirections(resolveSpriteAnimationDirections(spritePayload, animationKey)),
-  )
+const hasRequiredSpriteBundle = (spritePayload, fallbackAnimationKeys = []) => {
+  const expectedAnimationKeys = getExpectedSpriteAnimationKeys(spritePayload, fallbackAnimationKeys)
 
+  return (
+    hasSharedSpritePreview(spritePayload) &&
+    expectedAnimationKeys.length > 0 &&
+    expectedAnimationKeys.every((animationKey) =>
+      hasRequiredSpriteDirections(resolveSpriteAnimationDirections(spritePayload, animationKey)),
+    )
+  )
+}
+
+const hasRequiredAnimationCatalogOutput = (
+  job,
+  fallbackAnimationPresets = DEFAULT_RETARGET_ANIMATION_INPUT,
+) => {
+  const animationCatalog = getAnimationOutputCatalog(job)
+  const expectedAnimationKeys = getExpectedAnimationOutputKeys(job, fallbackAnimationPresets)
+
+  return (
+    expectedAnimationKeys.length > 0 &&
+    expectedAnimationKeys.every((animationKey) =>
+      hasUsableAnimationOutput(animationCatalog?.[animationKey]),
+    )
+  )
+}
+
+const hasExpectedTaskOutput = (job, fallbackAnimationPresets = DEFAULT_RETARGET_ANIMATION_INPUT) => {
+  const normalizedTaskType = getNormalizedTaskType(job?.taskType)
+
+  if (normalizedTaskType === 'animate_retarget' || normalizedTaskType === 'animate_model') {
+    const expectedAnimationKeys = getExpectedAnimationOutputKeys(job, fallbackAnimationPresets)
+    if (
+      expectedAnimationKeys.length > 1 ||
+      (job?.outputs?.animations && typeof job.outputs.animations === 'object')
+    ) {
+      return hasRequiredAnimationCatalogOutput(job, fallbackAnimationPresets)
+    }
+
+    return hasVariantOutput(job, ANIMATED_MODEL_VARIANT_PRIORITY)
+  }
+
+  if (normalizedTaskType === 'animate_rig') {
+    return hasVariantOutput(job, ['rigged_model'])
+  }
+
+  if (normalizedTaskType === 'animate_prerigcheck') {
+    return Boolean(job?.outputs?.preRigCheck)
+  }
+
+  return hasUsableModelOutput(job)
+}
+
+const shouldContinuePollingTripoJob = (job) => {
+  if (!job?.taskId) {
+    return false
+  }
+
+  const normalizedStatus = String(job.status || '').trim().toLowerCase()
+  if (normalizedStatus === 'queued' || normalizedStatus === 'running') {
+    return true
+  }
+
+  return normalizedStatus === 'success' && !hasExpectedTaskOutput(job)
+}
 const normalizePipelineState = (value) => {
   if (!value || typeof value !== 'object') {
     return null
@@ -792,54 +953,6 @@ const hasUsableModelOutput = (job) =>
       job?.outputs?.downloadUrl ||
       (job?.outputs?.variants && Object.keys(job.outputs.variants).length > 0),
   )
-
-const hasRequiredAnimationCatalogOutput = (job) => {
-  const animationCatalog = getAnimationOutputCatalog(job)
-  return ANIMATION_PREVIEW_KEYS.every((animationKey) =>
-    hasUsableAnimationOutput(animationCatalog?.[animationKey]),
-  )
-}
-
-const hasExpectedTaskOutput = (job) => {
-  const normalizedTaskType = getNormalizedTaskType(job?.taskType)
-
-  if (normalizedTaskType === 'animate_retarget' || normalizedTaskType === 'animate_model') {
-    const requestedAnimationKeys = normalizeRequestedAnimations(job?.requestedAnimations)
-      .map((animationPreset) => getAnimationKeyFromPreset(animationPreset))
-      .filter(Boolean)
-    if (
-      requestedAnimationKeys.length > 1 ||
-      (job?.outputs?.animations && typeof job.outputs.animations === 'object')
-    ) {
-      return hasRequiredAnimationCatalogOutput(job)
-    }
-
-    return hasVariantOutput(job, ANIMATED_MODEL_VARIANT_PRIORITY)
-  }
-
-  if (normalizedTaskType === 'animate_rig') {
-    return hasVariantOutput(job, ['rigged_model'])
-  }
-
-  if (normalizedTaskType === 'animate_prerigcheck') {
-    return Boolean(job?.outputs?.preRigCheck)
-  }
-
-  return hasUsableModelOutput(job)
-}
-
-const shouldContinuePollingTripoJob = (job) => {
-  if (!job?.taskId) {
-    return false
-  }
-
-  const normalizedStatus = String(job.status || '').trim().toLowerCase()
-  if (normalizedStatus === 'queued' || normalizedStatus === 'running') {
-    return true
-  }
-
-  return normalizedStatus === 'success' && !hasExpectedTaskOutput(job)
-}
 
 const mergeStep03TaskStateWithJob = (currentState, nextJob) => {
   const normalizedState = normalizeStep03TaskState(currentState)
@@ -980,6 +1093,22 @@ const normalizeAnimationMode = (value) => {
   return normalizedValue === 'animated' || normalizedValue === 'static' ? normalizedValue : ''
 }
 
+const normalizeTripoPbr = (value, fallback = DEV_PRESETS.tripoPbr) => {
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  const normalizedValue = String(value || '').trim().toLowerCase()
+  if (normalizedValue === 'true') {
+    return true
+  }
+  if (normalizedValue === 'false') {
+    return false
+  }
+
+  return fallback
+}
+
 const normalizeTripoQuality = (value, fallback = DEV_PRESETS.tripoMeshQuality) => {
   const normalizedValue = String(value || '').trim().toLowerCase()
   return TRIPO_QUALITY_VALUES.has(normalizedValue) ? normalizedValue : fallback
@@ -1024,6 +1153,9 @@ function App() {
     spriteSize: Number(initialSession?.devSettings?.spriteSize) || DEV_PRESETS.spriteSize,
     tripoAnimationMode:
       initialSession?.devSettings?.tripoAnimationMode || DEV_PRESETS.tripoAnimationMode,
+    tripoPbr: normalizeTripoPbr(initialSession?.devSettings?.tripoPbr, DEV_PRESETS.tripoPbr),
+    tripoRetargetAnimations:
+      initialSession?.devSettings?.tripoRetargetAnimations || DEV_PRESETS.tripoRetargetAnimations,
     tripoRetargetAnimationName:
       initialSession?.devSettings?.tripoRetargetAnimationName || DEV_PRESETS.tripoRetargetAnimationName,
     tripoMeshQuality: normalizeTripoQuality(
@@ -1068,6 +1200,7 @@ function App() {
   const [isCreatingRigTask, setIsCreatingRigTask] = useState(false)
   const [isCreatingRetargetTask, setIsCreatingRetargetTask] = useState(false)
   const [isGeneratingSprite, setIsGeneratingSprite] = useState(false)
+  const [isRunningAuto3dPipeline, setIsRunningAuto3dPipeline] = useState(false)
   const [isRefreshingTripoJob, setIsRefreshingTripoJob] = useState(false)
   const [isLoadingExistingTripoTask, setIsLoadingExistingTripoTask] = useState(false)
   const [isRestartingServer, setIsRestartingServer] = useState(false)
@@ -1098,14 +1231,58 @@ function App() {
     tripoRigModelVersion: '',
   }))
   const viewerCaptureApiRef = useRef(null)
+  const isStep04PreviewCaptureRef = useRef(false)
   const pendingTaskTimingByTaskIdRef = useRef(new Map())
   const statusProgressTrackRef = useRef(null)
   const step01PanelRef = useRef(null)
   const step02PanelRef = useRef(null)
   const step03BoundaryRef = useRef(null)
+  const configuredRetargetAnimations = resolveConfiguredRetargetAnimations(
+    devSettings.tripoRetargetAnimations,
+  )
+  const configuredAnimationPreviewKeys = resolveAnimationPreviewKeysFromPresets(
+    configuredRetargetAnimations,
+    DEFAULT_RETARGET_ANIMATION_INPUT,
+  )
+  const configuredAnimationPreviewKey =
+    configuredAnimationPreviewKeys[0] || LEGACY_ANIMATED_PREVIEW_KEY
   const modelOutputVariants = tripoJob.outputs?.variants || null
   const animationOutputCatalog = getAnimationOutputCatalog(tripoJob)
-  const availableAnimatedPreviewKeys = getAvailableAnimationOutputKeys(tripoJob)
+  const expectedAnimationOutputKeys = getExpectedAnimationOutputKeys(
+    tripoJob,
+    configuredRetargetAnimations,
+  )
+  const availableAnimatedPreviewKeys = getAvailableAnimationOutputKeys(
+    tripoJob,
+    configuredRetargetAnimations,
+  )
+  const step03AnimationPreviewKeys =
+    expectedAnimationOutputKeys.length > 0
+      ? expectedAnimationOutputKeys
+      : configuredAnimationPreviewKeys
+  const step03PreviewOptions = [
+    APOSE_PREVIEW_OPTION,
+    ...buildAnimationPreviewOptions(step03AnimationPreviewKeys),
+  ]
+  const step03PreviewOptionsKey = step03PreviewOptions.map((option) => option.key).join('|')
+  const fallbackSpriteAnimationKeys =
+    expectedAnimationOutputKeys.length > 0
+      ? expectedAnimationOutputKeys
+      : configuredAnimationPreviewKeys
+  const step04AnimationPreviewKeys = getExpectedSpriteAnimationKeys(
+    spriteResult,
+    fallbackSpriteAnimationKeys,
+  )
+  const step04PreviewOptions = [
+    SPRITE_360_PREVIEW_OPTION,
+    ...buildAnimationPreviewOptions(
+      step04AnimationPreviewKeys.length > 0
+        ? step04AnimationPreviewKeys
+        : fallbackSpriteAnimationKeys,
+    ),
+  ]
+  const requiredSpriteAnimationKeys =
+    step04AnimationPreviewKeys.length > 0 ? step04AnimationPreviewKeys : fallbackSpriteAnimationKeys
   const hasModelViewPack = MODEL_VIEW_CAPTURE_ORDER.some((view) => Boolean(modelViewPack?.[view.key]?.dataUrl))
   const availableModelVariants = MODEL_OUTPUT_VARIANT_ORDER.filter((variant) =>
     Boolean(modelOutputVariants?.[variant]),
@@ -1115,7 +1292,7 @@ function App() {
       ? ''
       : availableAnimatedPreviewKeys.includes(modelPreviewMode)
         ? modelPreviewMode
-        : resolvePreferredAnimatedPreviewKey(tripoJob)
+        : resolvePreferredAnimatedPreviewKey(tripoJob, configuredRetargetAnimations)
   const resolvedAnimatedOutput = resolvedAnimatedPreviewKey
     ? animationOutputCatalog?.[resolvedAnimatedPreviewKey] || null
     : null
@@ -1149,13 +1326,19 @@ function App() {
     modelPreviewMode !== 'apose' && Number.isInteger(resolvedAnimatedOutput?.clipIndex)
       ? resolvedAnimatedOutput.clipIndex
       : null
+  const legacyAnimatedPreviewKey = resolveLegacyAnimationOutputKey({
+    requestedAnimations:
+      tripoJob.requestedAnimations?.length > 0
+        ? tripoJob.requestedAnimations
+        : configuredRetargetAnimations,
+  })
   const activeModelUrl =
     modelPreviewMode === 'apose'
       ? (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) || tripoJob.outputs?.modelUrl || ''
       : resolvedAnimatedOutput?.modelUrl ||
         (animatedModelVariant && resolvedAnimatedVariants?.[animatedModelVariant]) ||
         (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
-        (resolvedAnimatedPreviewKey === DEFAULT_ANIMATED_PREVIEW_KEY ? tripoJob.outputs?.modelUrl || '' : '')
+        (resolvedAnimatedPreviewKey === legacyAnimatedPreviewKey ? tripoJob.outputs?.modelUrl || '' : '')
   const activeDownloadUrl =
     modelPreviewMode === 'apose'
       ? (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
@@ -1164,16 +1347,20 @@ function App() {
       : resolvedAnimatedOutput?.downloadUrl ||
         (animatedModelVariant && resolvedAnimatedVariants?.[animatedModelVariant]) ||
         (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
-        (resolvedAnimatedPreviewKey === DEFAULT_ANIMATED_PREVIEW_KEY
+        (resolvedAnimatedPreviewKey === legacyAnimatedPreviewKey
           ? tripoJob.outputs?.downloadUrl || ''
           : '')
-  const availableSpritePreviewKeys = getAvailableSpritePreviewKeys(spriteResult)
+  const availableSpritePreviewKeys = getAvailableSpritePreviewKeys(
+    spriteResult,
+    fallbackSpriteAnimationKeys,
+  )
+  const availableSpritePreviewKeysKey = availableSpritePreviewKeys.join('|')
   const resolvedSpritePreviewMode = availableSpritePreviewKeys.includes(spritePreviewMode)
     ? spritePreviewMode
     : availableSpritePreviewKeys.includes(DEFAULT_SPRITE_PREVIEW_KEY)
       ? DEFAULT_SPRITE_PREVIEW_KEY
-      : availableSpritePreviewKeys.includes(DEFAULT_ANIMATED_PREVIEW_KEY)
-        ? DEFAULT_ANIMATED_PREVIEW_KEY
+      : availableSpritePreviewKeys.includes(configuredAnimationPreviewKey)
+        ? configuredAnimationPreviewKey
         : availableSpritePreviewKeys[0] || DEFAULT_SPRITE_PREVIEW_KEY
   const activeSpriteDirections = devSettings.defaultSpritesEnabled
     ? buildDefaultSpriteDirections(defaultSpritesCacheKey)
@@ -1215,12 +1402,12 @@ function App() {
   const hasTurnaroundStepReady = hasCompleteTurnaround(multiviewResult?.views)
   const hasStep03ChainResult = Boolean(
     hasStep03AnimateTask &&
-      hasExpectedTaskOutput(tripoJob) &&
+      hasExpectedTaskOutput(tripoJob, configuredRetargetAnimations) &&
       tripoJob.taskId === step03TaskState.animateTaskId &&
       tripoJob.status === 'success' &&
       ['animate_retarget', 'animate_model'].includes(getNormalizedTaskType(tripoJob.taskType)),
   )
-  const hasStep04Output = hasRequiredSpriteBundle(spriteResult)
+  const hasStep04Output = hasRequiredSpriteBundle(spriteResult, requiredSpriteAnimationKeys)
   const canApproveStep01 = isStep01Unlocked && hasPortraitStepReady && !isGeneratingPortrait
   const canRunStep02Generation =
     isStep02Unlocked && hasPortraitStepReady && !turnaroundGenerationMode && !isGeneratingPortrait
@@ -1229,6 +1416,16 @@ function App() {
     isStep03Unlocked &&
     hasTurnaroundStepReady &&
     !isCreatingModel
+  const canRunStep03AutoPipeline =
+    isStep03Unlocked &&
+    hasTurnaroundStepReady &&
+    !isRunningAuto3dPipeline &&
+    !isCreatingModel &&
+    !isCreatingRigTask &&
+    !isCreatingRetargetTask &&
+    !isGeneratingSprite &&
+    !isCapturingWalkSprites &&
+    !isPreparingDownloadBundle
   const canRunStep03AutoRig =
     isStep03Unlocked &&
     hasStep03ModelTask &&
@@ -1240,12 +1437,17 @@ function App() {
   const canApproveStep03 = isStep03Unlocked && hasStep03ChainResult && !isCreatingRetargetTask
   const canRunStep04Generation =
     isStep04Unlocked &&
-    hasRequiredAnimationCatalogOutput(tripoJob) &&
+    hasRequiredAnimationCatalogOutput(tripoJob, configuredRetargetAnimations) &&
     !isGeneratingSprite &&
     !isCapturingWalkSprites &&
     !isPreparingDownloadBundle
   const canDownloadFinalBundle =
     isStep04Unlocked && pipelineState.approved.step4 && hasStep04Output && !isPreparingDownloadBundle
+  const configuredRetargetAnimationsLabel = configuredRetargetAnimations.join(' ') || 'None'
+  const currentPreviewLabel =
+    step03PreviewOptions.find((option) => option.key === modelPreviewMode)?.label ||
+    ANIMATION_LABEL_BY_KEY[modelPreviewMode] ||
+    'A-pose'
 
   const currentStepIndex = pipelineState.approved.step4 && hasStep04Output
     ? 4
@@ -1424,6 +1626,13 @@ function App() {
             Number(session.devSettings?.spriteSize) || currentDevSettings.spriteSize,
           tripoAnimationMode:
             session.devSettings?.tripoAnimationMode || currentDevSettings.tripoAnimationMode,
+          tripoPbr: normalizeTripoPbr(
+            session.devSettings?.tripoPbr,
+            currentDevSettings.tripoPbr,
+          ),
+          tripoRetargetAnimations:
+            session.devSettings?.tripoRetargetAnimations ??
+            currentDevSettings.tripoRetargetAnimations,
           tripoRetargetAnimationName:
             session.devSettings?.tripoRetargetAnimationName ??
             currentDevSettings.tripoRetargetAnimationName,
@@ -1563,13 +1772,21 @@ function App() {
     }
 
     setModelPreviewMode((currentMode) => {
-      if (currentMode !== 'apose' && STEP03_PREVIEW_OPTIONS.some((option) => option.key === currentMode)) {
+      if (
+        currentMode === 'apose' &&
+        isStep04PreviewCaptureRef.current &&
+        step03PreviewOptions.some((option) => option.key === currentMode)
+      ) {
         return currentMode
       }
 
-      return resolvePreferredAnimatedPreviewKey(tripoJob) || 'apose'
+      if (currentMode !== 'apose' && step03PreviewOptions.some((option) => option.key === currentMode)) {
+        return currentMode
+      }
+
+      return resolvePreferredAnimatedPreviewKey(tripoJob, configuredRetargetAnimations) || 'apose'
     })
-  }, [tripoJob])
+  }, [configuredRetargetAnimations, step03PreviewOptionsKey, tripoJob])
 
   useEffect(() => {
     setSpritePreviewMode((currentMode) => {
@@ -1581,13 +1798,13 @@ function App() {
         return DEFAULT_SPRITE_PREVIEW_KEY
       }
 
-      if (availableSpritePreviewKeys.includes(DEFAULT_ANIMATED_PREVIEW_KEY)) {
-        return DEFAULT_ANIMATED_PREVIEW_KEY
+      if (availableSpritePreviewKeys.includes(configuredAnimationPreviewKey)) {
+        return configuredAnimationPreviewKey
       }
 
       return availableSpritePreviewKeys[0] || DEFAULT_SPRITE_PREVIEW_KEY
     })
-  }, [availableSpritePreviewKeys])
+  }, [availableSpritePreviewKeysKey, configuredAnimationPreviewKey])
 
   const handleViewerCaptureApiReady = useCallback((captureApi) => {
     viewerCaptureApiRef.current = captureApi || null
@@ -2256,9 +2473,9 @@ function App() {
     setIsCapturingWalkSprites(true)
     const captureSize = normalizeSpriteSize(devSettings.spriteSize)
     const animationKey =
-      modelPreviewMode !== 'apose' && ANIMATION_PREVIEW_KEYS.includes(modelPreviewMode)
+      modelPreviewMode !== 'apose' && Boolean(ANIMATION_PREVIEW_OPTION_BY_KEY[modelPreviewMode])
         ? modelPreviewMode
-        : LEGACY_ANIMATED_PREVIEW_KEY
+        : configuredAnimationPreviewKey
 
     try {
       const capturedDirections = await captureApi.captureAnimatedSpriteDirections()
@@ -2310,6 +2527,7 @@ function App() {
         },
         meshQuality: devSettings.tripoMeshQuality,
         textureQuality: devSettings.tripoTextureQuality,
+        pbr: devSettings.tripoPbr,
         faceLimit: resolvedTripoFaceLimit,
       })
       setModelPreviewMode('apose')
@@ -2340,6 +2558,7 @@ function App() {
         imageDataUrl: frontImageDataUrl,
         meshQuality: devSettings.tripoMeshQuality,
         textureQuality: devSettings.tripoTextureQuality,
+        pbr: devSettings.tripoPbr,
         faceLimit: resolvedTripoFaceLimit,
       })
       setModelPreviewMode('apose')
@@ -2374,6 +2593,7 @@ function App() {
         },
         meshQuality: devSettings.tripoMeshQuality,
         textureQuality: devSettings.tripoTextureQuality,
+        pbr: devSettings.tripoPbr,
         faceLimit: resolvedTripoFaceLimit,
       })
       setModelPreviewMode('apose')
@@ -2388,9 +2608,58 @@ function App() {
     }
   }
 
-  const handleGenerateStep03 = async () => {
-    if (!canRunStep03Generation) {
-      return
+  const waitForTripoTaskCompletion = async (
+    taskId,
+    {
+      animationMode = '',
+      requestedAnimations = [],
+      timeoutMs = AUTO_PIPELINE_POLL_TIMEOUT_MS,
+      timeoutMessage = 'Timed out waiting for the 3D task to finish.',
+    } = {},
+  ) => {
+    const normalizedRequestedAnimations = normalizeRequestedAnimations(requestedAnimations)
+    const startedAt = Date.now()
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const nextJob = await refreshTripoJob(taskId, animationMode)
+      const normalizedJob = {
+        ...nextJob,
+        requestedAnimations:
+          nextJob?.requestedAnimations !== undefined
+            ? normalizeRequestedAnimations(nextJob.requestedAnimations)
+            : normalizedRequestedAnimations,
+      }
+
+      applyTripoJobUpdate(normalizedJob)
+
+      const normalizedStatus = String(normalizedJob.status || '').trim().toLowerCase()
+      if (normalizedStatus === 'failed') {
+        throw new Error(
+          sanitizeProviderNames(normalizedJob.error || 'The 3D task failed before completion.'),
+        )
+      }
+
+      if (
+        normalizedStatus === 'success' &&
+        hasExpectedTaskOutput(normalizedJob, normalizedRequestedAnimations)
+      ) {
+        return normalizedJob
+      }
+
+      await sleep(PIPELINE_POLL_INTERVAL_MS)
+    }
+
+    throw new Error(timeoutMessage)
+  }
+
+  const submitGenerateStep03Task = async ({
+    meshQuality = devSettings.tripoMeshQuality,
+    textureQuality = devSettings.tripoTextureQuality,
+    pbr = devSettings.tripoPbr,
+    faceLimit = resolvedTripoFaceLimit,
+  } = {}) => {
+    if (!multiviewResult?.views) {
+      throw new Error('Generate the turnaround views before creating the 3D model.')
     }
 
     setError('')
@@ -2409,9 +2678,10 @@ function App() {
           left: multiviewResult.views.left.imageDataUrl,
           right: multiviewResult.views.right.imageDataUrl,
         },
-        meshQuality: devSettings.tripoMeshQuality,
-        textureQuality: devSettings.tripoTextureQuality,
-        faceLimit: resolvedTripoFaceLimit,
+        meshQuality,
+        textureQuality,
+        pbr,
+        faceLimit,
       })
       setModelPreviewMode('apose')
       applyTripoTaskStart(result, {
@@ -2423,23 +2693,22 @@ function App() {
       } else {
         recordTaskTiming('generate3d', startedAt, 'failed')
       }
+      return result
     } catch (requestError) {
-      setError(sanitizeProviderNames(requestError?.message || 'Failed to start 3D model generation.'))
+      const nextError = sanitizeProviderNames(
+        requestError?.message || 'Failed to start 3D model generation.',
+      )
+      setError(nextError)
       recordTaskTiming('generate3d', startedAt, 'failed')
+      throw new Error(nextError)
     } finally {
       setIsCreatingModel(false)
     }
   }
 
-  const handleStep03AutoRig = async () => {
-    if (!canRunStep03AutoRig) {
-      return
-    }
-
-    const sourceTaskId = step03TaskState.modelTaskId
+  const submitStep03AutoRigTask = async (sourceTaskId = step03TaskState.modelTaskId) => {
     if (!sourceTaskId) {
-      setError('Generate 3D successfully before running AutoRig.')
-      return
+      throw new Error('Generate 3D successfully before running AutoRig.')
     }
 
     setError('')
@@ -2467,23 +2736,23 @@ function App() {
       } else {
         recordTaskTiming('autorig', startedAt, 'failed')
       }
+      return result
     } catch (requestError) {
-      setError(sanitizeProviderNames(requestError?.message || 'Failed to start AutoRig.'))
+      const nextError = sanitizeProviderNames(requestError?.message || 'Failed to start AutoRig.')
+      setError(nextError)
       recordTaskTiming('autorig', startedAt, 'failed')
+      throw new Error(nextError)
     } finally {
       setIsCreatingRigTask(false)
     }
   }
 
-  const handleStep03Animate = async () => {
-    if (!canRunStep03Animate) {
-      return
-    }
-
-    const sourceTaskId = step03TaskState.rigTaskId
+  const submitStep03AnimateTask = async ({
+    sourceTaskId = step03TaskState.rigTaskId,
+    requestedAnimations = configuredRetargetAnimations,
+  } = {}) => {
     if (!sourceTaskId) {
-      setError('Run AutoRig successfully before starting animation.')
-      return
+      throw new Error('Run AutoRig successfully before starting animation.')
     }
 
     setError('')
@@ -2496,46 +2765,39 @@ function App() {
     setIsCreatingRetargetTask(true)
 
     try {
+      const normalizedRequestedAnimations = normalizeRequestedAnimations(requestedAnimations)
       const result = await createTripoRetargetTask(sourceTaskId, {
-        animations: FIXED_RETARGET_ANIMATIONS,
+        animations: normalizedRequestedAnimations,
       })
-      setModelPreviewMode(DEFAULT_ANIMATED_PREVIEW_KEY)
+      setModelPreviewMode(configuredAnimationPreviewKey)
       applyTripoTaskStart(result, {
         animationMode: 'animated',
         fallbackTaskType: 'animate_retarget',
         fallbackSourceTaskId: sourceTaskId,
-        requestedAnimations: FIXED_RETARGET_ANIMATIONS,
+        requestedAnimations: normalizedRequestedAnimations,
       })
       if (result?.taskId) {
         startPendingTaskTiming(result.taskId, 'animate', startedAt)
       } else {
         recordTaskTiming('animate', startedAt, 'failed')
       }
+      return result
     } catch (requestError) {
-      setError(sanitizeProviderNames(requestError?.message || 'Failed to start animation.'))
+      const nextError = sanitizeProviderNames(requestError?.message || 'Failed to start animation.')
+      setError(nextError)
       recordTaskTiming('animate', startedAt, 'failed')
+      throw new Error(nextError)
     } finally {
       setIsCreatingRetargetTask(false)
     }
   }
 
-  const handleAcceptStep03 = () => {
-    if (!canApproveStep03) {
-      return
-    }
-
-    setError('')
-    updatePipelineState((nextState) => {
-      nextState.approved.step3 = true
-      nextState.unlocked.step4 = true
-    })
-  }
-
-  const handleGenerateStep04 = async () => {
-    if (!canRunStep04Generation) {
-      return
-    }
-
+  const runStep04Generation = async ({
+    animatedJob = tripoJob,
+    aposeCaptureModelUrl = (aposeModelVariant && modelOutputVariants?.[aposeModelVariant]) || '',
+    animationKeys = expectedAnimationOutputKeys,
+    primaryAnimationKey = configuredAnimationPreviewKey,
+  } = {}) => {
     setError('')
     const startedAt = Date.now()
     let generationStatus = 'failed'
@@ -2547,13 +2809,25 @@ function App() {
     const previousPreviewMode = modelPreviewMode
 
     try {
-      const aposeCaptureModelUrl =
-        (aposeModelVariant && modelOutputVariants?.[aposeModelVariant]) || ''
       if (!aposeCaptureModelUrl) {
         throw new Error('A-pose model is unavailable for 360 capture.')
       }
 
-      setModelPreviewMode('apose')
+      const requestedAnimationKeys = Array.from(
+        new Set(
+          (Array.isArray(animationKeys) ? animationKeys : []).filter((animationKey) =>
+            Boolean(ANIMATION_PREVIEW_OPTION_BY_KEY[animationKey]),
+          ),
+        ),
+      )
+      if (requestedAnimationKeys.length === 0) {
+        throw new Error('Animated model output is unavailable for sprite capture.')
+      }
+
+      isStep04PreviewCaptureRef.current = true
+      flushSync(() => {
+        setModelPreviewMode('apose')
+      })
       await sleep(0)
       const aposeCaptureApi = await waitForViewerModel(aposeCaptureModelUrl, 'apose')
       if (!aposeCaptureApi?.captureEightViews) {
@@ -2569,15 +2843,17 @@ function App() {
 
       const nextAnimations = {}
 
-      for (const animationKey of ANIMATION_PREVIEW_KEYS) {
-        const animationModelUrl = getAnimationPreviewModelUrl(tripoJob, animationKey)
+      for (const animationKey of requestedAnimationKeys) {
+        const animationModelUrl = getAnimationPreviewModelUrl(animatedJob, animationKey)
         if (!animationModelUrl) {
           throw new Error(
             `${ANIMATION_LABEL_BY_KEY[animationKey] || animationKey} animation model is unavailable.`,
           )
         }
 
-        setModelPreviewMode(animationKey)
+        flushSync(() => {
+          setModelPreviewMode(animationKey)
+        })
         await sleep(0)
         const captureApi = await waitForViewerModel(animationModelUrl, animationKey)
         if (!captureApi?.captureAnimatedSpriteDirections) {
@@ -2598,12 +2874,17 @@ function App() {
         ...currentValue,
         defaultSpritesEnabled: false,
       }))
-      setModelPreviewMode(DEFAULT_ANIMATED_PREVIEW_KEY)
+      const resolvedPrimaryAnimationKey = requestedAnimationKeys.includes(primaryAnimationKey)
+        ? primaryAnimationKey
+        : requestedAnimationKeys[0]
+      flushSync(() => {
+        setModelPreviewMode(resolvedPrimaryAnimationKey)
+      })
       setSpritePreviewMode(DEFAULT_SPRITE_PREVIEW_KEY)
       setSpriteResult({
-        animation: DEFAULT_ANIMATED_PREVIEW_KEY,
+        animation: resolvedPrimaryAnimationKey,
         spriteSize: captureSize,
-        directions: nextAnimations[DEFAULT_ANIMATED_PREVIEW_KEY]?.directions || null,
+        directions: nextAnimations[resolvedPrimaryAnimationKey]?.directions || null,
         sharedDirections: {
           [SPRITE_360_PREVIEW_KEY]: shared360Direction,
         },
@@ -2611,12 +2892,166 @@ function App() {
       })
       generationStatus = 'success'
     } catch (requestError) {
-      setError(sanitizeProviderNames(requestError?.message || 'Failed to capture animated sprites.'))
+      const nextError = sanitizeProviderNames(
+        requestError?.message || 'Failed to capture animated sprites.',
+      )
+      setError(nextError)
       setModelPreviewMode(previousPreviewMode)
+      throw new Error(nextError)
     } finally {
+      isStep04PreviewCaptureRef.current = false
       setIsGeneratingSprite(false)
       setIsCapturingWalkSprites(false)
       recordTaskTiming('generate25d', startedAt, generationStatus)
+    }
+  }
+
+  const handleGenerateStep03 = async () => {
+    if (!canRunStep03Generation || isRunningAuto3dPipeline) {
+      return
+    }
+
+    try {
+      await submitGenerateStep03Task()
+    } catch {
+      // Error state is already handled in the submit helper.
+    }
+  }
+
+  const handleStep03AutoRig = async () => {
+    if (!canRunStep03AutoRig || isRunningAuto3dPipeline) {
+      return
+    }
+
+    try {
+      await submitStep03AutoRigTask()
+    } catch {
+      // Error state is already handled in the submit helper.
+    }
+  }
+
+  const handleStep03Animate = async () => {
+    if (!canRunStep03Animate || isRunningAuto3dPipeline) {
+      return
+    }
+
+    try {
+      await submitStep03AnimateTask()
+    } catch {
+      // Error state is already handled in the submit helper.
+    }
+  }
+
+  const handleAcceptStep03 = () => {
+    if (!canApproveStep03) {
+      return
+    }
+
+    setError('')
+    updatePipelineState((nextState) => {
+      nextState.approved.step3 = true
+      nextState.unlocked.step4 = true
+    })
+  }
+
+  const handleGenerateStep04 = async () => {
+    if (!canRunStep04Generation || isRunningAuto3dPipeline) {
+      return
+    }
+
+    try {
+      await runStep04Generation()
+    } catch {
+      // Error state is already handled in the generation helper.
+    }
+  }
+
+  const handleGenerateStep03Auto = async () => {
+    if (!canRunStep03AutoPipeline) {
+      return
+    }
+
+    setError('')
+    setIsRunningAuto3dPipeline(true)
+
+    try {
+      const requestedAnimations = configuredRetargetAnimations
+      const modelStart = await submitGenerateStep03Task({
+        meshQuality: AUTO_STEP03_MESH_QUALITY,
+        textureQuality: AUTO_STEP03_TEXTURE_QUALITY,
+        pbr: devSettings.tripoPbr,
+        faceLimit: AUTO_STEP03_FACE_LIMIT,
+      })
+      if (!modelStart?.taskId) {
+        throw new Error('Failed to start automatic 3D generation.')
+      }
+
+      const modelJob = await waitForTripoTaskCompletion(modelStart.taskId, {
+        animationMode: 'static',
+        timeoutMessage: 'Timed out while generating the 3D model.',
+      })
+
+      const rigStart = await submitStep03AutoRigTask(modelJob.taskId)
+      if (!rigStart?.taskId) {
+        throw new Error('Failed to start automatic rigging.')
+      }
+
+      const rigJob = await waitForTripoTaskCompletion(rigStart.taskId, {
+        animationMode: 'static',
+        timeoutMessage: 'Timed out while rigging the 3D model.',
+      })
+
+      const animateStart = await submitStep03AnimateTask({
+        sourceTaskId: rigJob.taskId,
+        requestedAnimations,
+      })
+      if (!animateStart?.taskId) {
+        throw new Error('Failed to start automatic animation.')
+      }
+
+      const animatedJob = await waitForTripoTaskCompletion(animateStart.taskId, {
+        animationMode: 'animated',
+        requestedAnimations,
+        timeoutMessage: 'Timed out while generating animation outputs.',
+      })
+
+      flushSync(() => {
+        applyTripoJobUpdate(animatedJob)
+        updatePipelineState((nextState) => {
+          nextState.approved.step3 = true
+          nextState.unlocked.step4 = true
+        })
+      })
+
+      const animatedVariants = animatedJob?.outputs?.variants || null
+      const animatedAposeVariant = findFirstAvailableVariant(
+        animatedVariants,
+        APOSE_MODEL_VARIANT_PRIORITY,
+      )
+      const rigVariants = rigJob?.outputs?.variants || null
+      const rigAposeVariant = findFirstAvailableVariant(rigVariants, APOSE_MODEL_VARIANT_PRIORITY)
+      const rigAposeCaptureModelUrl =
+        (animatedAposeVariant && animatedVariants?.[animatedAposeVariant]) ||
+        (rigAposeVariant && rigVariants?.[rigAposeVariant]) ||
+        rigJob?.outputs?.modelUrl ||
+        ''
+      const autoAnimationKeys = getExpectedAnimationOutputKeys(animatedJob, requestedAnimations)
+
+      await sleep(0)
+      await runStep04Generation({
+        animatedJob,
+        aposeCaptureModelUrl: rigAposeCaptureModelUrl,
+        animationKeys: autoAnimationKeys,
+        primaryAnimationKey: autoAnimationKeys[0] || configuredAnimationPreviewKey,
+      })
+    } catch (requestError) {
+      setError(
+        sanitizeProviderNames(
+          requestError?.message || 'Failed to complete the automatic 3D pipeline.',
+        ),
+      )
+    } finally {
+      setIsRunningAuto3dPipeline(false)
     }
   }
 
@@ -2641,7 +3076,7 @@ function App() {
         throw new Error('3D model output is missing for download.')
       }
 
-      if (!hasRequiredSpriteBundle(spriteResult)) {
+      if (!hasRequiredSpriteBundle(spriteResult, requiredSpriteAnimationKeys)) {
         throw new Error('Sprite output is incomplete for download.')
       }
 
@@ -2694,7 +3129,7 @@ function App() {
       )
       spritesFolder?.file('360.gif', shared360Blob)
 
-      for (const animationKey of ANIMATION_PREVIEW_KEYS) {
+      for (const animationKey of requiredSpriteAnimationKeys) {
         const animationFolder = spritesFolder?.folder(animationKey)
         const directions = resolveSpriteAnimationDirections(spriteResult, animationKey)
         if (!hasRequiredSpriteDirections(directions)) {
@@ -2854,12 +3289,11 @@ function App() {
         ...nextJob,
         taskId: nextJob.taskId || trimmedTaskId,
         animationMode: nextAnimationMode,
-        requestedAnimations:
-          nextJob?.outputs?.animations && typeof nextJob.outputs.animations === 'object'
-            ? ANIMATION_PREVIEW_KEYS.filter((animationKey) => nextJob.outputs.animations?.[animationKey]).map(
-                (animationKey) => ANIMATION_PRESET_BY_KEY[animationKey],
-              )
-            : normalizeRequestedAnimations(nextJob?.requestedAnimations),
+        requestedAnimations: ANIMATED_TASK_TYPES.has(getNormalizedTaskType(nextJob.taskType))
+          ? getExpectedAnimationOutputKeys(nextJob, configuredRetargetAnimations)
+              .map((animationKey) => ANIMATION_PRESET_BY_KEY[animationKey] || '')
+              .filter(Boolean)
+          : normalizeRequestedAnimations(nextJob?.requestedAnimations),
       })
       setStep03TaskState((currentState) => mergeStep03TaskStateWithJob(currentState, nextJob))
     } catch (requestError) {
@@ -2932,6 +3366,7 @@ function App() {
       setIsCreatingRigTask(false)
       setIsCreatingRetargetTask(false)
       setIsGeneratingSprite(false)
+      setIsRunningAuto3dPipeline(false)
       setIsRefreshingTripoJob(false)
       setIsLoadingExistingTripoTask(false)
       setViewerResetSignal((signal) => signal + 1)
@@ -2951,6 +3386,8 @@ function App() {
         portraitPromptPreset: DEV_PRESETS.portraitPreset,
         spriteSize: DEV_PRESETS.spriteSize,
         tripoAnimationMode: DEV_PRESETS.tripoAnimationMode,
+        tripoPbr: DEV_PRESETS.tripoPbr,
+        tripoRetargetAnimations: DEV_PRESETS.tripoRetargetAnimations,
         tripoRetargetAnimationName: DEV_PRESETS.tripoRetargetAnimationName,
         tripoMeshQuality: DEV_PRESETS.tripoMeshQuality,
         tripoTextureQuality: DEV_PRESETS.tripoTextureQuality,
@@ -3299,7 +3736,7 @@ function App() {
                     }
                     aria-label="3D model animation preview"
                   >
-                    {STEP03_PREVIEW_OPTIONS.map((option) => (
+                    {step03PreviewOptions.map((option) => (
                       <option key={option.key} value={option.key}>
                         {option.label}
                       </option>
@@ -3330,31 +3767,39 @@ function App() {
                   </div>
                 )}
               </div>
-              <div className="action-row action-row--compact">
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={!canRunStep03Generation}
-                  onClick={handleGenerateStep03}
-                >
-                  {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={!canRunStep03AutoRig}
-                  onClick={handleStep03AutoRig}
-                >
-                  {isCreatingRigTask ? 'Rigging...' : 'AutoRig'}
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={!canRunStep03Animate}
-                  onClick={handleStep03Animate}
-                >
-                  {isCreatingRetargetTask ? 'Animating...' : 'Animate'}
-                </button>
+            <div className="action-row action-row--compact">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!canRunStep03AutoPipeline}
+                onClick={handleGenerateStep03Auto}
+              >
+                {isRunningAuto3dPipeline ? 'Running 3D Auto...' : 'Generate 3D Auto'}
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!canRunStep03Generation || isRunningAuto3dPipeline}
+                onClick={handleGenerateStep03}
+              >
+                {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!canRunStep03AutoRig || isRunningAuto3dPipeline}
+                onClick={handleStep03AutoRig}
+              >
+                {isCreatingRigTask ? 'Rigging...' : 'AutoRig'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!canRunStep03Animate || isRunningAuto3dPipeline}
+                onClick={handleStep03Animate}
+              >
+                {isCreatingRetargetTask ? 'Animating...' : 'Animate'}
+              </button>
                 <button
                   type="button"
                   className="accept-button accept-button--icon-only"
@@ -3399,7 +3844,7 @@ function App() {
                   onChange={(event) => setSpritePreviewMode(event.target.value)}
                   aria-label="Sprite animation preview"
                 >
-                  {SPRITE_PREVIEW_OPTIONS.map((option) => (
+                  {step04PreviewOptions.map((option) => (
                     <option key={option.key} value={option.key}>
                       {option.label}
                     </option>
@@ -3418,7 +3863,7 @@ function App() {
               <button
                 type="button"
                 className="primary-button"
-                disabled={!canRunStep04Generation}
+                disabled={!canRunStep04Generation || isRunningAuto3dPipeline}
                 onClick={handleGenerateStep04}
               >
                 {isGeneratingSprite || isCapturingWalkSprites ? 'Generating 2.5D...' : 'Generate 2.5D'}
@@ -3499,6 +3944,7 @@ function App() {
                 <option value="64">64x64</option>
                 <option value="84">84x84</option>
                 <option value="128">128x128</option>
+                <option value="256">256x256</option>
               </select>
             </label>
             <label className="dev-panel__field">
@@ -3515,6 +3961,35 @@ function App() {
                 <option value="animated">Animated</option>
                 <option value="static">Static</option>
               </select>
+            </label>
+            <label className="dev-panel__field">
+              <span>PBR</span>
+              <select
+                value={String(devSettings.tripoPbr)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    tripoPbr: normalizeTripoPbr(event.target.value, currentValue.tripoPbr),
+                  }))
+                }
+              >
+                <option value="true">True</option>
+                <option value="false">False</option>
+              </select>
+            </label>
+            <label className="dev-panel__field">
+              <span>Retarget Animations</span>
+              <input
+                type="text"
+                value={devSettings.tripoRetargetAnimations}
+                placeholder={DEFAULT_RETARGET_ANIMATION_INPUT}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    tripoRetargetAnimations: event.target.value,
+                  }))
+                }
+              />
             </label>
             <label className="dev-panel__field">
               <span>Retarget Animation</span>
@@ -3691,13 +4166,12 @@ function App() {
                   Retarget animation:{' '}
                   {String(devSettings.tripoRetargetAnimationName || '').trim() || 'Server default'}
                 </p>
+                <p>Retarget animations: {configuredRetargetAnimationsLabel}</p>
                 <p>Mesh quality: {TRIPO_QUALITY_LABELS[devSettings.tripoMeshQuality]}</p>
                 <p>Texture quality: {TRIPO_QUALITY_LABELS[devSettings.tripoTextureQuality]}</p>
+                <p>PBR: {devSettings.tripoPbr ? 'true' : 'false'}</p>
                 <p>Face limit: {resolvedTripoFaceLimit || 'adaptive'}</p>
-                <p>
-                  Preview pose:{' '}
-                  {STEP03_PREVIEW_OPTIONS.find((option) => option.key === modelPreviewMode)?.label || 'A-pose'}
-                </p>
+                <p>Preview pose: {currentPreviewLabel}</p>
                 <p>
                   Preview variant:{' '}
                   {resolvedModelVariant
@@ -3731,7 +4205,7 @@ function App() {
                     setModelPreviewMode(normalizeAnimationPreviewKey(event.target.value))
                   }
                 >
-                  {STEP03_PREVIEW_OPTIONS.map((option) => (
+                  {step03PreviewOptions.map((option) => (
                     <option key={option.key} value={option.key}>
                       {option.label}
                     </option>

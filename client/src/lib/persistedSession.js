@@ -13,6 +13,7 @@ orthographic neutral A-pose, white seamless background`,
 orthographic, neutral A-pose, light grey seamless background, sharp focus, No weapon, No cape`,
 ])
 const ANIMATED_TASK_TYPES = new Set(['animate_retarget', 'animate_model'])
+const DEFAULT_RETARGET_ANIMATION_INPUT = 'preset:biped:walk preset:biped:run'
 
 const canUseStorage = () => typeof window !== 'undefined' && Boolean(window.localStorage)
 const canUseIndexedDb = () => typeof window !== 'undefined' && Boolean(window.indexedDB)
@@ -237,18 +238,29 @@ const normalizeSpriteResult = (spriteResult) => {
         : null
     }
 
-    const idleDirections = normalizedAnimations?.idle?.directions || null
+    const animationDirections = Object.values(normalizedAnimations)
+      .map((entry) => entry?.directions || null)
+      .filter(Boolean)
     const legacyDirections =
       spriteResult?.directions && typeof spriteResult.directions === 'object'
         ? spriteResult.directions
         : null
-    const shared360 =
-      idleDirections?.view_360 ||
-      idleDirections?.view360 ||
-      idleDirections?.['360'] ||
-      legacyDirections?.view_360 ||
-      legacyDirections?.view360 ||
-      legacyDirections?.['360']
+
+    let shared360 = null
+    for (const directions of animationDirections) {
+      shared360 = directions?.view_360 || directions?.view360 || directions?.['360'] || null
+      if (shared360) {
+        break
+      }
+    }
+
+    if (!shared360) {
+      shared360 =
+        legacyDirections?.view_360 ||
+        legacyDirections?.view360 ||
+        legacyDirections?.['360'] ||
+        null
+    }
 
     return shared360
       ? {
@@ -276,7 +288,7 @@ const normalizeSpriteResult = (spriteResult) => {
 
   return {
     animation: firstAnimationKey,
-    spriteSize: Number(spriteResult.spriteSize) || 64,
+    spriteSize: Number(spriteResult.spriteSize) || 128,
     directions: normalizedAnimations[firstAnimationKey]?.directions || null,
     animations: Object.keys(normalizedAnimations).length > 0 ? normalizedAnimations : null,
     sharedDirections,
@@ -319,8 +331,16 @@ const normalizeDevSettings = (devSettings) => ({
     typeof devSettings?.autoMultiviewAfterPortrait === 'boolean'
       ? devSettings.autoMultiviewAfterPortrait
       : true,
-  spriteSize: Number(devSettings?.spriteSize) || 64,
+  spriteSize: Number(devSettings?.spriteSize) || 128,
   tripoAnimationMode: devSettings?.tripoAnimationMode === 'static' ? 'static' : 'animated',
+  tripoPbr:
+    typeof devSettings?.tripoPbr === 'boolean'
+      ? devSettings.tripoPbr
+      : String(devSettings?.tripoPbr || '').trim().toLowerCase() === 'false'
+        ? false
+        : true,
+  tripoRetargetAnimations:
+    String(devSettings?.tripoRetargetAnimations || '').trim() || DEFAULT_RETARGET_ANIMATION_INPUT,
   tripoRetargetAnimationName: String(devSettings?.tripoRetargetAnimationName || ''),
   tripoMeshQuality: devSettings?.tripoMeshQuality === 'detailed' ? 'detailed' : 'standard',
   tripoTextureQuality: devSettings?.tripoTextureQuality === 'detailed' ? 'detailed' : 'standard',

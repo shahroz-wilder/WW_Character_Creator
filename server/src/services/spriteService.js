@@ -3,7 +3,7 @@ import { imageBufferToDataUrl, parseImageDataUrl } from '../utils/dataUrl.js'
 import { AppError } from '../utils/errors.js'
 import { normalizeForSprite } from './imageTransformService.js'
 
-const VALID_SPRITE_SIZES = new Set([64, 84, 128])
+const VALID_SPRITE_SIZES = new Set([64, 84, 128, 256])
 const REQUIRED_DIRECTIONS = ['front', 'back', 'left', 'right']
 const PIXELLAB_DIRECTION_MAP = {
   front: 'south',
@@ -139,7 +139,7 @@ const assertValidSpriteSize = (spriteSize) => {
   const normalizedSize = Number(spriteSize)
 
   if (!VALID_SPRITE_SIZES.has(normalizedSize)) {
-    throw new AppError('Sprite size must be one of: 64, 84, 128.', 400)
+    throw new AppError('Sprite size must be one of: 64, 84, 128, 256.', 400)
   }
 
   return normalizedSize

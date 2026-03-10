@@ -17,20 +17,17 @@ import {
   restartDevServer,
 } from '../api/characterApi'
 
-const FIXED_RETARGET_ANIMATIONS = [
-  'preset:biped:wait',
-  'preset:walk',
-  'preset:run',
-  'preset:slash',
-]
-const ANIMATION_KEYS = ['idle', 'walk', 'run', 'slash']
+const DEFAULT_RETARGET_ANIMATIONS = ['preset:biped:walk', 'preset:biped:run']
+const DEFAULT_ANIMATION_KEYS = ['walk', 'run']
 const getPresetForAnimationKey = (animationKey) =>
-  animationKey === 'idle' ? 'preset:biped:wait' : `preset:${animationKey}`
+  animationKey === 'idle' ? 'preset:biped:wait' : `preset:biped:${animationKey}`
 const VALID_CAPTURE_FRAME =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8LkAAAAASUVORK5CYII='
 const viewerCaptureAnimatedSpriteDirectionsMock = vi.fn().mockResolvedValue({})
 const viewerCaptureEightViewsMock = vi.fn().mockResolvedValue({})
 const viewerWaitUntilReadyMock = vi.fn().mockResolvedValue({ modelUrl: '' })
+const originalCreateElement = document.createElement.bind(document)
+const originalImage = global.Image
 
 vi.mock('../api/characterApi', () => ({
   generatePortrait: vi.fn(),
@@ -123,9 +120,21 @@ const makeCapturedSpriteDirections = (seed) =>
     ),
   )
 
+const makeCapturedModelViews = () =>
+  Object.fromEntries(
+    ['front', 'front_right', 'right', 'back_right', 'back', 'back_left', 'left', 'front_left'].map(
+      (directionKey) => [
+        directionKey,
+        {
+          dataUrl: VALID_CAPTURE_FRAME,
+        },
+      ],
+    ),
+  )
+
 const makeRequiredSpriteAnimations = () =>
   Object.fromEntries(
-    ANIMATION_KEYS.map((animationKey) => [
+    DEFAULT_ANIMATION_KEYS.map((animationKey) => [
       animationKey,
       {
         animation: animationKey,
@@ -137,7 +146,7 @@ const makeRequiredSpriteAnimations = () =>
   )
 
 const makeCompleteSpriteResult = () => ({
-  animation: 'idle',
+  animation: 'walk',
   spriteSize: 64,
   directions: makeRequiredSpriteDirections(),
   sharedDirections: makeSharedSpriteDirections(),
@@ -166,9 +175,10 @@ const makeMultiAnimationTask = (
   {
     taskType = 'animate_retarget',
     sourceTaskId = 'rig-task',
-    animationKeys = ANIMATION_KEYS,
+    animationKeys = DEFAULT_ANIMATION_KEYS,
   } = {},
 ) => {
+  const primaryAnimationKey = animationKeys[0] || DEFAULT_ANIMATION_KEYS[0]
   const animations = Object.fromEntries(
     animationKeys.map((animationKey) => [
       animationKey,
@@ -193,11 +203,11 @@ const makeMultiAnimationTask = (
     progress: 100,
     error: '',
     outputs: {
-      modelUrl: `/api/tripo/tasks/${taskId}/model?variant=animation_model&animationMode=animated&animationKey=idle`,
-      downloadUrl: `/api/tripo/tasks/${taskId}/model?variant=animation_model&animationMode=animated&animationKey=idle`,
+      modelUrl: `/api/tripo/tasks/${taskId}/model?variant=animation_model&animationMode=animated&animationKey=${primaryAnimationKey}`,
+      downloadUrl: `/api/tripo/tasks/${taskId}/model?variant=animation_model&animationMode=animated&animationKey=${primaryAnimationKey}`,
       variant: 'animation_model',
       variants: {
-        animation_model: `/api/tripo/tasks/${taskId}/model?variant=animation_model&animationMode=animated&animationKey=idle`,
+        animation_model: `/api/tripo/tasks/${taskId}/model?variant=animation_model&animationMode=animated&animationKey=${primaryAnimationKey}`,
         rigged_model: `/api/tripo/tasks/${taskId}/model?variant=rigged_model&animationMode=animated`,
       },
       animations,
@@ -210,10 +220,11 @@ const makeBundledMultiAnimationTask = (
   {
     taskType = 'animate_retarget',
     sourceTaskId = 'rig-task',
-    animationKeys = ANIMATION_KEYS,
+    animationKeys = DEFAULT_ANIMATION_KEYS,
   } = {},
 ) => {
-  const sharedModelUrl = `/api/tripo/tasks/${taskId}/model?variant=model&animationMode=animated&animationKey=idle`
+  const primaryAnimationKey = animationKeys[0] || DEFAULT_ANIMATION_KEYS[0]
+  const sharedModelUrl = `/api/tripo/tasks/${taskId}/model?variant=model&animationMode=animated&animationKey=${primaryAnimationKey}`
   const animations = Object.fromEntries(
     animationKeys.map((animationKey, clipIndex) => [
       animationKey,
@@ -281,6 +292,51 @@ const unlockStep03 = async (user) => {
 
 describe('App', () => {
   beforeEach(() => {
+    vi.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
+      const element = originalCreateElement(tagName, options)
+
+      if (String(tagName).toLowerCase() === 'canvas') {
+        element.getContext = vi.fn(() => ({
+          clearRect: vi.fn(),
+          drawImage: vi.fn(),
+          getImageData: vi.fn(() => ({
+            data: new Uint8ClampedArray(4),
+          })),
+          imageSmoothingEnabled: true,
+        }))
+        element.toDataURL = vi.fn(() => VALID_CAPTURE_FRAME)
+      }
+
+      return element
+    })
+    global.Image = class {
+      constructor() {
+        this.onload = null
+        this.onerror = null
+        this.width = 1
+        this.height = 1
+        this.naturalWidth = 1
+        this.naturalHeight = 1
+        this._src = ''
+      }
+
+      get src() {
+        return this._src
+      }
+
+      set src(value) {
+        this._src = value
+        window.setTimeout(() => {
+          if (String(value).startsWith('data:image/')) {
+            this.onload?.()
+            return
+          }
+
+          this.onerror?.(new Error('Unsupported test image source.'))
+        }, 0)
+      }
+    }
+
     getHealth.mockResolvedValue({
       status: 'ok',
       versions: {
@@ -324,6 +380,7 @@ describe('App', () => {
     vi.clearAllMocks()
     vi.useRealTimers()
     window.localStorage.clear()
+    global.Image = originalImage
   })
 
   it('renders unified top progress bar and initial step gating', () => {
@@ -442,7 +499,7 @@ describe('App', () => {
     await user.click(animateButton)
     await waitFor(() =>
       expect(createTripoRetargetTask).toHaveBeenCalledWith('rig-task', {
-        animations: FIXED_RETARGET_ANIMATIONS,
+        animations: DEFAULT_RETARGET_ANIMATIONS,
       }),
     )
     expect(accept3DButton).toBeDisabled()
@@ -454,7 +511,69 @@ describe('App', () => {
     expect(getProgressFill()).toHaveAttribute('data-step-index', '3')
   }, 25000)
 
-  it('switches 3D preview to Idle when the full animation set completes', async () => {
+  it('runs Generate 3D Auto through rigging, animation, and 2.5D capture', async () => {
+    createTripoTask.mockResolvedValue({ taskId: 'model-task', status: 'queued' })
+    createTripoRigTask.mockResolvedValue({ taskId: 'rig-task', status: 'queued' })
+    createTripoRetargetTask.mockResolvedValue({ taskId: 'retarget-task', status: 'queued' })
+    viewerCaptureEightViewsMock.mockResolvedValue(makeCapturedModelViews())
+    viewerCaptureAnimatedSpriteDirectionsMock.mockResolvedValue(makeCapturedSpriteDirections())
+    getTripoTask.mockImplementation(async (taskId) => {
+      if (taskId === 'model-task') {
+        return makeSuccessfulTask(
+          'model-task',
+          'multiview_to_model',
+          'model',
+          '/api/tripo/tasks/model-task/model?variant=model&animationMode=static',
+        )
+      }
+      if (taskId === 'rig-task') {
+        return makeSuccessfulTask(
+          'rig-task',
+          'animate_rig',
+          'rigged_model',
+          '/api/tripo/tasks/rig-task/model?variant=rigged_model&animationMode=static',
+        )
+      }
+      if (taskId === 'retarget-task') {
+        return makeMultiAnimationTask('retarget-task')
+      }
+      return { taskId, status: 'running', progress: 35, outputs: null }
+    })
+
+    render(<App />)
+    const user = userEvent.setup()
+    await unlockStep03(user)
+
+    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Generate 3D Auto' }))
+
+    await waitFor(() =>
+      expect(createTripoTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meshQuality: 'detailed',
+          textureQuality: 'detailed',
+          faceLimit: 64000,
+        }),
+      ),
+    )
+    await waitFor(() => expect(createTripoRigTask).toHaveBeenCalledWith('model-task'))
+    await waitFor(() =>
+      expect(createTripoRetargetTask).toHaveBeenCalledWith('rig-task', {
+        animations: DEFAULT_RETARGET_ANIMATIONS,
+      }),
+    )
+    await waitFor(() => expect(viewerCaptureEightViewsMock).toHaveBeenCalledTimes(1), {
+      timeout: 12000,
+    })
+    await waitFor(() => expect(viewerCaptureAnimatedSpriteDirectionsMock).toHaveBeenCalledTimes(2), {
+      timeout: 12000,
+    })
+    await waitFor(
+      () => expect(within(getStep04Panel()).getByRole('button', { name: 'Download' })).toBeEnabled(),
+      { timeout: 15000 },
+    )
+  }, 30000)
+
+  it('switches 3D preview to Walk when the configured animation set completes', async () => {
     createTripoTask.mockResolvedValue({ taskId: 'model-task', status: 'queued' })
     createTripoRigTask.mockResolvedValue({ taskId: 'rig-task', status: 'queued' })
     createTripoRetargetTask.mockResolvedValue({ taskId: 'retarget-task', status: 'queued' })
@@ -515,7 +634,7 @@ describe('App', () => {
     expect(previewSelect).toHaveValue('apose')
 
     await waitFor(() => expect(accept3DButton).toBeEnabled(), { timeout: 12000 })
-    await waitFor(() => expect(previewSelect).toHaveValue('idle'), { timeout: 12000 })
+    await waitFor(() => expect(previewSelect).toHaveValue('walk'), { timeout: 12000 })
   }, 30000)
 
   it('keeps polling animate tasks until the full animation catalog is available', async () => {
@@ -552,28 +671,28 @@ describe('App', () => {
             error: '',
             outputs: {
               modelUrl:
-                '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=idle',
+                '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=walk',
               downloadUrl:
-                '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=idle',
+                '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=walk',
               variant: 'animation_model',
               variants: {
                 animation_model:
-                  '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=idle',
+                  '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=walk',
                 rigged_model:
                   '/api/tripo/tasks/retarget-task/model?variant=rigged_model&animationMode=animated',
               },
               animations: {
-                idle: {
-                  preset: 'preset:biped:wait',
-                  label: 'Idle',
+                walk: {
+                  preset: 'preset:biped:walk',
+                  label: 'Walk',
                   variant: 'animation_model',
                   modelUrl:
-                    '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=idle',
+                    '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=walk',
                   downloadUrl:
-                    '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=idle',
+                    '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=walk',
                   variants: {
                     animation_model:
-                      '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=idle',
+                      '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=walk',
                   },
                 },
               },
@@ -607,12 +726,12 @@ describe('App', () => {
     await waitFor(
       () =>
         expect(screen.getByTestId('viewer-stub')).toHaveTextContent(
-          '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=idle',
+          '/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=walk',
         ),
       { timeout: 15000 },
     )
     await waitFor(() => expect(accept3DButton).toBeEnabled(), { timeout: 15000 })
-    expect(previewSelect).toHaveValue('idle')
+    expect(previewSelect).toHaveValue('walk')
   }, 30000)
 
   it('switches bundled retarget clips in the viewer when animations share one GLB', async () => {
@@ -660,7 +779,7 @@ describe('App', () => {
     await user.click(animateButton)
 
     await waitFor(() => expect(accept3DButton).toBeEnabled(), { timeout: 12000 })
-    expect(screen.getByTestId('viewer-stub')).toHaveAttribute('data-animation-selection', 'idle')
+    expect(screen.getByTestId('viewer-stub')).toHaveAttribute('data-animation-selection', 'walk')
     expect(screen.getByTestId('viewer-stub')).toHaveAttribute('data-animation-clip-index', '0')
 
     await user.selectOptions(previewSelect, 'run')
@@ -668,7 +787,7 @@ describe('App', () => {
     await waitFor(() =>
       expect(screen.getByTestId('viewer-stub')).toHaveAttribute('data-animation-selection', 'run'),
     )
-    expect(screen.getByTestId('viewer-stub')).toHaveAttribute('data-animation-clip-index', '2')
+    expect(screen.getByTestId('viewer-stub')).toHaveAttribute('data-animation-clip-index', '1')
   }, 30000)
 
   it('maps single-animation retarget outputs to the matching preview key', async () => {
@@ -763,6 +882,68 @@ describe('App', () => {
     )
   })
 
+  it('uses the dev retarget animations field for the main Animate button', async () => {
+    window.localStorage.setItem(
+      'ww-character-session-v1',
+      JSON.stringify({
+        prompt: 'pilot',
+        multiviewPrompt: 'mv',
+        devSettings: {
+          portraitAspectRatio: '1:1',
+          portraitPromptPreset: 'preset',
+          spriteSize: 64,
+          tripoAnimationMode: 'animated',
+          tripoRetargetAnimations: 'preset:biped:walk preset:biped:run',
+          tripoRetargetAnimationName: '',
+          tripoMeshQuality: 'standard',
+          tripoTextureQuality: 'standard',
+          defaultSpritesEnabled: false,
+        },
+        portraitResult: {
+          imageDataUrl: makeDataUrl('portrait'),
+          promptUsed: 'pilot',
+          inputMode: 'prompt',
+          originalReferenceImageDataUrl: '',
+        },
+        multiviewResult: makeFullMultiviewResult(),
+        tripoJob: makeSuccessfulTask(
+          'rig-task-dev',
+          'animate_rig',
+          'rigged_model',
+          '/api/tripo/tasks/rig-task-dev/model?variant=rigged_model&animationMode=static',
+        ),
+        pipelineState: {
+          unlocked: { step1: true, step2: true, step3: true, step4: false },
+          approved: { step1: true, step2: true, step3: false, step4: false },
+        },
+        step03TaskState: {
+          modelTaskId: 'model-task-dev',
+          rigTaskId: 'rig-task-dev',
+          animateTaskId: '',
+        },
+      }),
+    )
+
+    createTripoRetargetTask.mockResolvedValue({ taskId: 'retarget-task-dev', status: 'queued' })
+
+    render(<App />)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'DEV' }))
+    await user.clear(screen.getByLabelText('Retarget Animations'))
+    await user.type(
+      screen.getByLabelText('Retarget Animations'),
+      'preset:biped:run preset:biped:slash',
+    )
+    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Animate' }))
+
+    await waitFor(() =>
+      expect(createTripoRetargetTask).toHaveBeenCalledWith('rig-task-dev', {
+        animations: ['preset:biped:run', 'preset:biped:slash'],
+      }),
+    )
+  })
+
   it('keeps Generate 3D and AutoRig enabled after Animate starts', async () => {
     createTripoTask.mockResolvedValue({ taskId: 'model-task', status: 'queued' })
     createTripoRigTask.mockResolvedValue({ taskId: 'rig-task', status: 'queued' })
@@ -815,7 +996,7 @@ describe('App', () => {
 
     await waitFor(() =>
       expect(createTripoRetargetTask).toHaveBeenCalledWith('rig-task', {
-        animations: FIXED_RETARGET_ANIMATIONS,
+        animations: DEFAULT_RETARGET_ANIMATIONS,
       }),
     )
     expect(generate3DButton).toBeEnabled()
@@ -977,7 +1158,7 @@ describe('App', () => {
     expect(within(getStep04Panel()).queryByRole('button', { name: 'Accept Sprite' })).toBeNull()
   })
 
-  it('shows the multi-animation dropdown options in Step 03 and Step 04', async () => {
+  it('shows the configured animation dropdown options in Step 03 and Step 04', async () => {
     render(<App />)
     const user = userEvent.setup()
     await unlockStep03(user)
@@ -986,15 +1167,49 @@ describe('App', () => {
     const step04Select = within(getStep04Panel()).getByLabelText('Sprite animation preview')
 
     expect(within(step03Select).getByRole('option', { name: 'A-pose' })).toBeInTheDocument()
-    expect(within(step03Select).getByRole('option', { name: 'Idle' })).toBeInTheDocument()
     expect(within(step03Select).getByRole('option', { name: 'Walk' })).toBeInTheDocument()
     expect(within(step03Select).getByRole('option', { name: 'Run' })).toBeInTheDocument()
-    expect(within(step03Select).getByRole('option', { name: 'Slash' })).toBeInTheDocument()
+    expect(within(step03Select).queryByRole('option', { name: 'Idle' })).toBeNull()
+    expect(within(step03Select).queryByRole('option', { name: 'Slash' })).toBeNull()
     expect(within(step04Select).getByRole('option', { name: '360' })).toBeInTheDocument()
-    expect(within(step04Select).getByRole('option', { name: 'Idle' })).toBeInTheDocument()
     expect(within(step04Select).getByRole('option', { name: 'Walk' })).toBeInTheDocument()
     expect(within(step04Select).getByRole('option', { name: 'Run' })).toBeInTheDocument()
-    expect(within(step04Select).getByRole('option', { name: 'Slash' })).toBeInTheDocument()
+    expect(within(step04Select).queryByRole('option', { name: 'Idle' })).toBeNull()
+    expect(within(step04Select).queryByRole('option', { name: 'Slash' })).toBeNull()
+  })
+
+  it('defaults the DEV sprite size to 128 and exposes a 256 option', async () => {
+    render(<App />)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'DEV' }))
+
+    const spriteSizeSelect = screen.getByRole('combobox', { name: 'Sprite Size' })
+    expect(spriteSizeSelect).toHaveValue('128')
+    expect(within(spriteSizeSelect).getByRole('option', { name: '256x256' })).toBeInTheDocument()
+  })
+
+  it('defaults DEV PBR to true and lets Generate 3D send false', async () => {
+    createTripoTask.mockResolvedValue({ taskId: 'model-task', status: 'queued' })
+
+    render(<App />)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'DEV' }))
+    const pbrSelect = screen.getByRole('combobox', { name: 'PBR' })
+    expect(pbrSelect).toHaveValue('true')
+    await user.selectOptions(pbrSelect, 'false')
+
+    await unlockStep03(user)
+    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Generate 3D' }))
+
+    await waitFor(() =>
+      expect(createTripoTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pbr: false,
+        }),
+      ),
+    )
   })
 
   it('switches the sprite browser by dropdown across animation bundles', async () => {
