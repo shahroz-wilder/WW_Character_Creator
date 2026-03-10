@@ -22,6 +22,7 @@ import { MultiviewPromptEditor } from './components/MultiviewPromptEditor'
 import { PortraitReviewCard } from './components/PortraitReviewCard'
 import { SpriteGrid } from './components/SpriteGrid'
 import { downloadBlob, downloadDataUrl, downloadFromUrl } from './lib/download'
+import { isEmbeddedMode, sendSpriteResult, sendClose } from './lib/gameIpc'
 import { createHistoryEntry, createRunId, updateHistoryEntry } from './lib/historyStore'
 import {
   clearPersistedSession,
@@ -1246,6 +1247,11 @@ function App() {
     !isPreparingDownloadBundle
   const canDownloadFinalBundle =
     isStep04Unlocked && pipelineState.approved.step4 && hasStep04Output && !isPreparingDownloadBundle
+
+  // Embedded mode: show "Use in Game" instead of / alongside "Download"
+  const embedded = isEmbeddedMode()
+  const [isSendingToGame, setIsSendingToGame] = useState(false)
+  const canSendToGame = canDownloadFinalBundle && !isSendingToGame
 
   const currentStepIndex = pipelineState.approved.step4 && hasStep04Output
     ? 4
@@ -2725,6 +2731,47 @@ function App() {
     }
   }
 
+  // ── Embedded mode: send sprite to host game ──────────────────────
+  const handleSendToGame = async () => {
+    if (!canSendToGame) return
+
+    setError('')
+    setIsSendingToGame(true)
+
+    try {
+      // Prefer the default animation's directions (walk/run), fall back to
+      // the top-level directions on spriteResult.
+      const animationKey = spriteResult?.animation || DEFAULT_ANIMATED_PREVIEW_KEY
+      const directions =
+        resolveSpriteAnimationDirections(spriteResult, animationKey) ||
+        spriteResult?.directions ||
+        null
+
+      if (!directions || !hasRequiredSpriteDirections(directions)) {
+        throw new Error('Sprite directions are incomplete.')
+      }
+
+      // Build a clean payload with only the frame data URLs per direction
+      const cleanDirections = {}
+      for (const { key } of MODEL_VIEW_CAPTURE_ORDER) {
+        const dir = resolveSpriteDirection(directions, key)
+        if (dir?.frameDataUrls?.length) {
+          cleanDirections[key] = { frameDataUrls: dir.frameDataUrls }
+        }
+      }
+
+      await sendSpriteResult({
+        directions: cleanDirections,
+        spriteSize: Number(spriteResult?.spriteSize) || 128,
+        animation: animationKey,
+      })
+    } catch (requestError) {
+      setError(requestError?.message || 'Failed to send sprite to game.')
+    } finally {
+      setIsSendingToGame(false)
+    }
+  }
+
   const handleAnimateRig = async () => {
     const sourceTaskId = resolvedAnimateRigTaskId
 
@@ -3423,14 +3470,34 @@ function App() {
               >
                 {isGeneratingSprite || isCapturingWalkSprites ? 'Generating 2.5D...' : 'Generate 2.5D'}
               </button>
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={!canDownloadFinalBundle}
-                onClick={handleDownloadFinalBundle}
-              >
-                {isPreparingDownloadBundle ? 'Preparing...' : 'Download'}
-              </button>
+              {embedded ? (
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={!canSendToGame}
+                  onClick={handleSendToGame}
+                >
+                  {isSendingToGame ? 'Sending...' : 'Use in Game'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!canDownloadFinalBundle}
+                  onClick={handleDownloadFinalBundle}
+                >
+                  {isPreparingDownloadBundle ? 'Preparing...' : 'Download'}
+                </button>
+              )}
+              {embedded && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={sendClose}
+                >
+                  Close
+                </button>
+              )}
             </div>
           </section>
         </section>
