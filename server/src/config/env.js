@@ -51,6 +51,8 @@ export const loadEnv = (source = process.env) => {
     tripoIdleAnimationTaskType: source.TRIPO_IDLE_ANIMATION_TASK_TYPE || 'animate_model',
     tripoIdleAnimationName: source.TRIPO_IDLE_ANIMATION_NAME || 'preset:biped:wait',
     tripoIdleAnimationInPlace: parseBoolean(source.TRIPO_IDLE_ANIMATION_IN_PLACE, true),
+    spritesDir: source.SPRITES_DIR || 'sprites',
+    spritesPublicUrl: source.SPRITES_PUBLIC_URL || '',
   }
 
   const missingKeys = []

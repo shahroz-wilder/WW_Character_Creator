@@ -9,6 +9,7 @@ import { createPortraitService } from './services/portraitService.js'
 import { createMultiviewService } from './services/multiviewService.js'
 import { createTripoService } from './services/tripoService.js'
 import { createSpriteService } from './services/spriteService.js'
+import { createStorageService } from './services/storageService.js'
 import { createHealthRouter } from './routes/health.js'
 import { createCharacterRouter } from './routes/character.js'
 import { createTripoRouter } from './routes/tripo.js'
@@ -61,6 +62,9 @@ export const createApp = (config = loadEnv(), services = {}) => {
     createSpriteService({
       pixellabClient,
     })
+  const storageService =
+    services.storageService ||
+    createStorageService({ config })
 
   const app = express()
 
@@ -75,7 +79,13 @@ export const createApp = (config = loadEnv(), services = {}) => {
   app.use('/api/health', createHealthRouter({ config }))
   app.use('/api/character', createCharacterRouter({ portraitService, multiviewService }))
   app.use('/api/tripo', createTripoRouter({ tripoService }))
-  app.use('/api/sprites', createSpriteRouter({ spriteService }))
+  // Serve stored sprite sheets with immutable cache headers
+  app.use('/sprites', express.static(storageService.spritesDir, {
+    maxAge: '365d',
+    immutable: true,
+  }))
+
+  app.use('/api/sprites', createSpriteRouter({ spriteService, storageService }))
   app.use('/api/dev', createDevRouter({ requestServerRestart: services.requestServerRestart }))
 
   app.use((error, _req, res, _next) => {

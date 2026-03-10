@@ -19,8 +19,10 @@ const readSearchParams = () => {
 /** True when the app was loaded with `?embedded=true`. */
 export const isEmbeddedMode = () => readSearchParams().get('embedded') === 'true'
 
-/** Optional server endpoint that accepts frame data and returns a processed result. */
-export const getCallbackUrl = () => readSearchParams().get('callbackUrl') || ''
+/** Server endpoint that accepts frame data and returns a processed result.
+ *  Defaults to same-origin `/api/sprites/create` when in embedded mode. */
+export const getCallbackUrl = () =>
+  readSearchParams().get('callbackUrl') || (isEmbeddedMode() ? '/api/sprites/create' : '')
 
 /** Optional player identity passed by the host. */
 export const getPlayerId = () => readSearchParams().get('playerId') || ''

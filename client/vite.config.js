@@ -16,6 +16,10 @@ export default defineConfig({
         target: 'http://localhost:5000',
         changeOrigin: true,
       },
+      '/sprites': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+      },
     },
   },
 })
