@@ -20,6 +20,7 @@ const VIEW_CAPTURE_PRESETS = [
 const ANIMATED_SPRITE_CAPTURE_FOV = 24
 const ANIMATED_SPRITE_CAPTURE_FRAME_COUNT = 16
 const ANIMATED_SPRITE_FRAME_DELAY_MS = 90
+const ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG = 35.264
 
 const buildFloorGrid = (object) => {
   const box = new THREE.Box3().setFromObject(object)
@@ -182,25 +183,26 @@ const resolveRequestedAnimationClip = (
 
 const MARGIN_RATIO = 0.1
 
-const getCaptureFraming = (camera, object) => {
+const getCaptureFraming = (camera, object, { pitchDeg = 0 } = {}) => {
   const box = new THREE.Box3().setFromObject(object)
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())
   const fitRatio = Math.max(1 - MARGIN_RATIO * 2, 0.2)
-  const safeWidth = Math.max(size.x, 0.001)
-  const safeHeight = Math.max(size.y, 0.001)
+  const pitchRad = THREE.MathUtils.degToRad(Math.max(Number(pitchDeg) || 0, 0))
+  const horizontalFootprint = Math.max(Math.hypot(size.x, size.z), size.x, size.z, 0.001)
+  const safeHeight = Math.max(size.y + horizontalFootprint * Math.sin(pitchRad), 0.001)
   const verticalFovRad = THREE.MathUtils.degToRad(camera.fov)
   const horizontalFovRad =
     2 * Math.atan(Math.tan(verticalFovRad / 2) * Math.max(camera.aspect, 0.001))
 
   const distanceForHeight = (safeHeight / fitRatio) / (2 * Math.tan(verticalFovRad / 2))
-  const distanceForWidth = (safeWidth / fitRatio) / (2 * Math.tan(horizontalFovRad / 2))
-  const horizontalDistance = Math.max(distanceForHeight, distanceForWidth, 1.5)
+  const distanceForWidth = (horizontalFootprint / fitRatio) / (2 * Math.tan(horizontalFovRad / 2))
+  const orbitDistance = Math.max(distanceForHeight, distanceForWidth, 1.5)
 
   return {
     center,
-    horizontalDistance,
-    verticalOffset: 0,
+    orbitDistance,
+    pitchRad,
   }
 }
 
@@ -290,13 +292,16 @@ export function ModelViewer({
       const originalTarget = controls.target.clone()
       const originalPosition = camera.position.clone()
       const originalQuaternion = camera.quaternion.clone()
-      const { center: captureTarget, horizontalDistance, verticalOffset } = getCaptureFraming(
+      const { center: captureTarget, orbitDistance, pitchRad } = getCaptureFraming(
         camera,
         loadedScene,
+        { pitchDeg: ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG },
       )
       // The generated Tripo character forward axis aligns with +X in this viewer.
       // Use +X as canonical front so capture labels map to actual views.
       const baseHorizontal = new THREE.Vector3(1, 0, 0)
+      const horizontalRadius = orbitDistance * Math.cos(pitchRad)
+      const verticalOffset = orbitDistance * Math.sin(pitchRad)
 
       const screenshots = {}
       const originalBackground = scene.background
@@ -315,8 +320,8 @@ export function ModelViewer({
             .applyAxisAngle(worldUp, THREE.MathUtils.degToRad(preset.yawDeg))
             .normalize()
 
-          camera.position.copy(captureTarget).addScaledVector(direction, horizontalDistance)
-          camera.position.y = captureTarget.y + verticalOffset
+          camera.position.copy(captureTarget).addScaledVector(direction, horizontalRadius)
+          camera.position.y += verticalOffset
           camera.lookAt(captureTarget)
           controls.target.copy(captureTarget)
           controls.update()
@@ -374,11 +379,14 @@ export function ModelViewer({
 
         camera.fov = captureFov
         camera.updateProjectionMatrix()
-        const { center: captureTarget, horizontalDistance, verticalOffset } = getCaptureFraming(
+        const { center: captureTarget, orbitDistance, pitchRad } = getCaptureFraming(
           camera,
           loadedScene,
+          { pitchDeg: ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG },
         )
         const baseHorizontal = new THREE.Vector3(1, 0, 0)
+        const horizontalRadius = orbitDistance * Math.cos(pitchRad)
+        const verticalOffset = orbitDistance * Math.sin(pitchRad)
 
         for (const preset of VIEW_CAPTURE_PRESETS) {
           const direction = baseHorizontal
@@ -386,8 +394,8 @@ export function ModelViewer({
             .applyAxisAngle(worldUp, THREE.MathUtils.degToRad(preset.yawDeg))
             .normalize()
 
-          camera.position.copy(captureTarget).addScaledVector(direction, horizontalDistance)
-          camera.position.y = captureTarget.y + verticalOffset
+          camera.position.copy(captureTarget).addScaledVector(direction, horizontalRadius)
+          camera.position.y += verticalOffset
           camera.lookAt(captureTarget)
           controls.target.copy(captureTarget)
           controls.update()
