@@ -33,7 +33,7 @@ export const createSpriteRouter = ({ spriteService, storageService }) => {
    */
   router.post('/create', async (req, res) => {
     try {
-      const { playerId, directions, spriteSize } = req.body || {}
+      const { playerId, directions, idleDirections, spriteSize } = req.body || {}
 
       if (!playerId) {
         return res.status(400).json({ error: 'playerId is required' })
@@ -43,7 +43,7 @@ export const createSpriteRouter = ({ spriteService, storageService }) => {
         return res.status(400).json({ error: 'directions object is required' })
       }
 
-      const { buffer, hash } = await assembleSheet(directions, spriteSize ?? 128)
+      const { buffer, hash } = await assembleSheet(directions, spriteSize ?? 128, idleDirections)
 
       const spriteUrl = await storageService.uploadSpriteSheet(playerId, buffer, hash)
 

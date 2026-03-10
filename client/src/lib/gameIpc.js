@@ -27,6 +27,12 @@ export const getCallbackUrl = () =>
 /** Optional player identity passed by the host. */
 export const getPlayerId = () => readSearchParams().get('playerId') || ''
 
+/** Optional sprite size override passed by the host (e.g. 128). */
+export const getEmbeddedSpriteSize = () => {
+  const val = Number(readSearchParams().get('spriteSize'))
+  return val > 0 ? val : 0
+}
+
 // ---------------------------------------------------------------------------
 // Low-level transport
 // ---------------------------------------------------------------------------
@@ -60,7 +66,7 @@ const postToHost = (payload) => {
  * @param {number} options.spriteSize  - Pixel size of each frame (64 | 84 | 128)
  * @param {string} [options.animation] - Animation name (e.g. 'walk')
  */
-export const sendSpriteResult = async ({ directions, spriteSize, animation }) => {
+export const sendSpriteResult = async ({ directions, idleDirections, spriteSize, animation }) => {
   const callbackUrl = getCallbackUrl()
 
   if (callbackUrl) {
@@ -71,6 +77,7 @@ export const sendSpriteResult = async ({ directions, spriteSize, animation }) =>
         body: JSON.stringify({
           playerId: getPlayerId(),
           directions,
+          idleDirections,
           spriteSize,
           animation,
         }),

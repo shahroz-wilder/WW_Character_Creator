@@ -65,10 +65,7 @@ export const loadEnv = (source = process.env) => {
     missingKeys.push('TRIPO_API_KEY')
   }
 
-  if (!env.pixellabApiKey) {
-    missingKeys.push('PIXELLAB_API_KEY')
-  }
-
+  // PIXELLAB_API_KEY is optional — only needed for PixelLab 2D pipeline
   if (missingKeys.length > 0) {
     throw new Error(`Missing required environment variables: ${missingKeys.join(', ')}`)
   }
