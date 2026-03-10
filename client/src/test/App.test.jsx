@@ -573,6 +573,56 @@ describe('App', () => {
     )
   }, 30000)
 
+  it('continues the auto pipeline to retarget when rig success arrives before rigged output normalization', async () => {
+    createTripoTask.mockResolvedValue({ taskId: 'model-task', status: 'queued' })
+    createTripoRigTask.mockResolvedValue({ taskId: 'rig-task', status: 'queued' })
+    createTripoRetargetTask.mockResolvedValue({ taskId: 'retarget-task', status: 'queued' })
+    viewerCaptureEightViewsMock.mockResolvedValue(makeCapturedModelViews())
+    viewerCaptureAnimatedSpriteDirectionsMock.mockResolvedValue(makeCapturedSpriteDirections())
+    getTripoTask.mockImplementation(async (taskId) => {
+      if (taskId === 'model-task') {
+        return makeSuccessfulTask(
+          'model-task',
+          'multiview_to_model',
+          'model',
+          '/api/tripo/tasks/model-task/model?variant=model&animationMode=static',
+        )
+      }
+      if (taskId === 'rig-task') {
+        return {
+          taskId: 'rig-task',
+          taskType: 'animate_rig',
+          sourceTaskId: 'model-task',
+          status: 'success',
+          progress: 100,
+          error: '',
+          outputs: null,
+        }
+      }
+      if (taskId === 'retarget-task') {
+        return makeMultiAnimationTask('retarget-task')
+      }
+      return { taskId, status: 'running', progress: 35, outputs: null }
+    })
+
+    render(<App />)
+    const user = userEvent.setup()
+    await unlockStep03(user)
+
+    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Generate 3D Auto' }))
+
+    await waitFor(() => expect(createTripoRigTask).toHaveBeenCalledWith('model-task'))
+    await waitFor(() =>
+      expect(createTripoRetargetTask).toHaveBeenCalledWith('rig-task', {
+        animations: DEFAULT_RETARGET_ANIMATIONS,
+      }),
+    )
+    await waitFor(
+      () => expect(within(getStep04Panel()).getByRole('button', { name: 'Download' })).toBeEnabled(),
+      { timeout: 15000 },
+    )
+  }, 30000)
+
   it('switches 3D preview to Walk when the configured animation set completes', async () => {
     createTripoTask.mockResolvedValue({ taskId: 'model-task', status: 'queued' })
     createTripoRigTask.mockResolvedValue({ taskId: 'rig-task', status: 'queued' })

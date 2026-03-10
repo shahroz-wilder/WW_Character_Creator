@@ -59,7 +59,7 @@ const DEFAULT_RETARGET_ANIMATION_INPUT = 'preset:biped:walk preset:biped:run'
 const AUTO_STEP03_MESH_QUALITY = 'detailed'
 const AUTO_STEP03_TEXTURE_QUALITY = 'detailed'
 const AUTO_STEP03_FACE_LIMIT = 64000
-const AUTO_PIPELINE_POLL_TIMEOUT_MS = 300000
+const AUTO_PIPELINE_POLL_TIMEOUT_MS = 600000
 
 const DEV_PRESETS = {
   portraitAspectRatio: '1:1',
@@ -2613,6 +2613,7 @@ function App() {
     {
       animationMode = '',
       requestedAnimations = [],
+      acceptSuccessWithoutExpectedOutput = false,
       timeoutMs = AUTO_PIPELINE_POLL_TIMEOUT_MS,
       timeoutMessage = 'Timed out waiting for the 3D task to finish.',
     } = {},
@@ -2641,7 +2642,8 @@ function App() {
 
       if (
         normalizedStatus === 'success' &&
-        hasExpectedTaskOutput(normalizedJob, normalizedRequestedAnimations)
+        (acceptSuccessWithoutExpectedOutput ||
+          hasExpectedTaskOutput(normalizedJob, normalizedRequestedAnimations))
       ) {
         return normalizedJob
       }
@@ -2998,6 +3000,7 @@ function App() {
 
       const rigJob = await waitForTripoTaskCompletion(rigStart.taskId, {
         animationMode: 'static',
+        acceptSuccessWithoutExpectedOutput: true,
         timeoutMessage: 'Timed out while rigging the 3D model.',
       })
 
