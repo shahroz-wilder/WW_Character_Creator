@@ -65,9 +65,8 @@ export const loadEnv = (source = process.env) => {
     missingKeys.push('TRIPO_API_KEY')
   }
 
-  if (!env.pixellabApiKey) {
-    missingKeys.push('PIXELLAB_API_KEY')
-  }
+  // PIXELLAB_API_KEY is only needed for the 2D sprite generation pipeline
+  // (/api/sprites/run). The 3D Tripo pipeline captures sprites client-side.
 
   if (missingKeys.length > 0) {
     throw new Error(`Missing required environment variables: ${missingKeys.join(', ')}`)
