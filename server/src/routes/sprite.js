@@ -43,7 +43,7 @@ export const createSpriteRouter = ({ spriteService, storageService }) => {
         return res.status(400).json({ error: 'directions object is required' })
       }
 
-      const { buffer, hash } = await assembleSheet(directions, spriteSize ?? 128, idleDirections)
+      const { buffer, hash } = await assembleSheet({ directions, idleDirections, spriteSize: spriteSize ?? 128 })
 
       const spriteUrl = await storageService.uploadSpriteSheet(playerId, buffer, hash)
 

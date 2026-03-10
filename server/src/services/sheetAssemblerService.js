@@ -46,55 +46,50 @@ const DIAGONAL_FALLBACK = {
   front_right: 'front',
 }
 
+/** Resolve a direction's data, falling back to nearest cardinal for diagonals. */
+const resolveDirection = (dirs, direction) => {
+  const data = dirs?.[direction]
+  if (data?.frameDataUrls?.length) return data
+  return DIAGONAL_FALLBACK[direction] ? dirs?.[DIAGONAL_FALLBACK[direction]] ?? null : null
+}
+
 /**
  * Assemble individual animation frames into a single sprite sheet PNG.
  *
- * @param {Object} directions - 8-direction frame data { front: { frameDataUrls: [...] }, ... }
- * @param {number} spriteSize - Source frame pixel size (64 | 84 | 128)
+ * @param {Object} options
+ * @param {Object} options.directions   - 8-direction walk frame data { front: { frameDataUrls }, ... }
+ * @param {Object} [options.idleDirections] - Optional 8-direction idle frame data
+ * @param {number} [options.spriteSize] - Source frame pixel size (64 | 84 | 128)
  * @returns {{ buffer: Buffer, hash: string }}
  */
-export async function assembleSheet(directions, spriteSize = 128, idleDirections = null) {
+export async function assembleSheet({ directions, idleDirections = null, spriteSize = 128 }) {
   if (!directions || typeof directions !== 'object') {
     throw new AppError('Missing directions for sheet assembly', 400)
   }
 
-  const composites = []
+  const resizeTasks = []
 
   for (const [direction, row] of Object.entries(DIRECTION_ROW_MAP)) {
-    // Use the direction's frames, or fall back to nearest cardinal for diagonals
-    let dirData = directions[direction]
-    if (!dirData?.frameDataUrls?.length && DIAGONAL_FALLBACK[direction]) {
-      dirData = directions[DIAGONAL_FALLBACK[direction]]
-    }
+    const dirData = resolveDirection(directions, direction)
     if (!dirData?.frameDataUrls?.length) continue
 
     const frames = dirData.frameDataUrls
 
     // Column 0: idle frame — use dedicated idle animation if available, otherwise first walk frame
-    let idleDirData = idleDirections?.[direction]
-    if (!idleDirData?.frameDataUrls?.length && DIAGONAL_FALLBACK[direction]) {
-      idleDirData = idleDirections?.[DIAGONAL_FALLBACK[direction]]
-    }
+    const idleDirData = resolveDirection(idleDirections, direction)
     const idleFrameUrl = idleDirData?.frameDataUrls?.[0] || frames[0]
-    const idleBuffer = await resizeFrame(idleFrameUrl, spriteSize)
-    composites.push({
-      input: idleBuffer,
-      top: row * FRAME_SIZE,
-      left: 0,
-    })
+    resizeTasks.push({ dataUrl: idleFrameUrl, spriteSize, top: row * FRAME_SIZE, left: 0 })
 
     // Columns 1-4: walk/run frames (take up to 4, wrap if fewer)
     const walkFrames = frames.slice(0, 4)
     for (let col = 0; col < 4; col++) {
       const frameUrl = walkFrames[col % walkFrames.length]
-      const frameBuffer = await resizeFrame(frameUrl, spriteSize)
-      composites.push({
-        input: frameBuffer,
-        top: row * FRAME_SIZE,
-        left: (col + 1) * FRAME_SIZE,
-      })
+      resizeTasks.push({ dataUrl: frameUrl, spriteSize, top: row * FRAME_SIZE, left: (col + 1) * FRAME_SIZE })
     }
   }
+
+  const resizedBuffers = await Promise.all(resizeTasks.map((t) => resizeFrame(t.dataUrl, t.spriteSize)))
+  const composites = resizeTasks.map((t, i) => ({ input: resizedBuffers[i], top: t.top, left: t.left }))
 
   if (composites.length === 0) {
     throw new AppError('No valid frame data found in any direction', 400)

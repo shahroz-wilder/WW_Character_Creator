@@ -14,6 +14,9 @@ export const createStorageService = ({ config }) => {
       if (!safeId || safeId === '.' || safeId === '..') {
         throw new Error('Invalid playerId')
       }
+      if (!/^[a-f0-9]+$/.test(hash)) {
+        throw new Error('Invalid hash')
+      }
       const dir = path.join(spritesDir, safeId)
       await fs.mkdir(dir, { recursive: true })
 
