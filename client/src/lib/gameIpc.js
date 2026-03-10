@@ -8,28 +8,29 @@
  * Without a callbackUrl the raw frame data is sent directly.
  */
 
-const readSearchParams = () => {
+/** Cached search params — URL does not change during the session. */
+const _params = (() => {
   try {
     return new URLSearchParams(window.location.search)
   } catch {
     return new URLSearchParams()
   }
-}
+})()
 
 /** True when the app was loaded with `?embedded=true`. */
-export const isEmbeddedMode = () => readSearchParams().get('embedded') === 'true'
+export const isEmbeddedMode = () => _params.get('embedded') === 'true'
 
 /** Server endpoint that accepts frame data and returns a processed result.
  *  Defaults to same-origin `/api/sprites/create` when in embedded mode. */
 export const getCallbackUrl = () =>
-  readSearchParams().get('callbackUrl') || (isEmbeddedMode() ? '/api/sprites/create' : '')
+  _params.get('callbackUrl') || (isEmbeddedMode() ? '/api/sprites/create' : '')
 
 /** Optional player identity passed by the host. */
-export const getPlayerId = () => readSearchParams().get('playerId') || ''
+export const getPlayerId = () => _params.get('playerId') || ''
 
 /** Optional sprite size override passed by the host (e.g. 128). */
 export const getEmbeddedSpriteSize = () => {
-  const val = Number(readSearchParams().get('spriteSize'))
+  const val = Number(_params.get('spriteSize'))
   return val > 0 ? val : 0
 }
 
