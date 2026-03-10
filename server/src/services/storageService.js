@@ -9,13 +9,18 @@ export const createStorageService = ({ config }) => {
     spritesDir,
 
     async uploadSpriteSheet(playerId, buffer, hash) {
-      const dir = path.join(spritesDir, playerId)
+      // Sanitize playerId to prevent path traversal
+      const safeId = path.basename(playerId)
+      if (!safeId || safeId === '.' || safeId === '..') {
+        throw new Error('Invalid playerId')
+      }
+      const dir = path.join(spritesDir, safeId)
       await fs.mkdir(dir, { recursive: true })
 
       const filename = `${hash}.png`
       await fs.writeFile(path.join(dir, filename), buffer)
 
-      return `${publicUrl}/${playerId}/${filename}`
+      return `${publicUrl}/${safeId}/${filename}`
     },
   }
 }
