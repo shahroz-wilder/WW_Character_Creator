@@ -73,6 +73,7 @@ export const createTripoRouter = ({ tripoService }) => {
     try {
       const result = await tripoService.createRetargetTask(req.params.taskId, {
         animationName: req.body?.animationName,
+        animations: req.body?.animations,
       })
       res.json(result)
     } catch (error) {
@@ -93,6 +94,7 @@ export const createTripoRouter = ({ tripoService }) => {
         status: summary.status,
         progress: summary.progress,
         error: summary.error,
+        requestedAnimations: summary.requestedAnimations,
         outputs: summary.outputs,
       })
     } catch (error) {
@@ -105,6 +107,7 @@ export const createTripoRouter = ({ tripoService }) => {
     try {
       const asset = await tripoService.getModelAsset(req.params.taskId, req.query.variant, {
         animationMode: req.query?.animationMode,
+        animationKey: req.query?.animationKey,
       })
       const contentType = asset.response.headers.get('content-type') || 'model/gltf-binary'
       const contentLength = asset.response.headers.get('content-length')

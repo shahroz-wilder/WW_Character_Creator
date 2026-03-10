@@ -131,6 +131,55 @@ const chooseIdleLikeClip = (clips = []) => {
   return idleLikeClip || clips[0]
 }
 
+const normalizeAnimationToken = (value) => String(value || '').trim().toLowerCase()
+
+const ANIMATION_CLIP_NAME_HINTS = Object.freeze({
+  idle: ['idle', 'stand', 'rest'],
+  walk: ['walk'],
+  run: ['run', 'jog', 'sprint'],
+  slash: ['slash', 'attack', 'swing'],
+})
+
+const resolveRequestedAnimationClip = (
+  clips = [],
+  { animationSelectionKey = 'apose', animationClipIndex = null, animationClipName = '' } = {},
+) => {
+  if (!Array.isArray(clips) || clips.length === 0) {
+    return null
+  }
+
+  const normalizedSelectionKey = normalizeAnimationToken(animationSelectionKey)
+  if (!normalizedSelectionKey || normalizedSelectionKey === 'apose') {
+    return null
+  }
+
+  const normalizedClipName = normalizeAnimationToken(animationClipName)
+  if (normalizedClipName) {
+    const namedClip = clips.find(
+      (clip) => normalizeAnimationToken(clip?.name) === normalizedClipName,
+    )
+    if (namedClip) {
+      return namedClip
+    }
+  }
+
+  if (
+    Number.isInteger(animationClipIndex) &&
+    animationClipIndex >= 0 &&
+    animationClipIndex < clips.length
+  ) {
+    return clips[animationClipIndex]
+  }
+
+  const nameHints = ANIMATION_CLIP_NAME_HINTS[normalizedSelectionKey] || [normalizedSelectionKey]
+  const matchedClip = clips.find((clip) => {
+    const normalizedName = normalizeAnimationToken(clip?.name)
+    return nameHints.some((hint) => normalizedName.includes(hint))
+  })
+
+  return matchedClip || chooseIdleLikeClip(clips)
+}
+
 const MARGIN_RATIO = 0.1
 
 const getCaptureFraming = (camera, object) => {
@@ -155,7 +204,14 @@ const getCaptureFraming = (camera, object) => {
   }
 }
 
-export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = null }) {
+export function ModelViewer({
+  modelUrl,
+  animationSelectionKey = 'apose',
+  animationClipIndex = null,
+  animationClipName = '',
+  resetSignal = 0,
+  onCaptureApiReady = null,
+}) {
   const containerRef = useRef(null)
   const controlsRef = useRef(null)
   const isCapturingSnapshotsRef = useRef(false)
@@ -217,6 +273,8 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
     const fbxLoader = new FBXLoader()
     let loadedScene = null
     let hasLoadedModel = false
+    let didFinishLoading = false
+    let loadErrorMessage = ''
     let mixer = null
     let floorGrid = null
     let targetSkinnedMesh = null
@@ -367,8 +425,43 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
       return sprites
     }
 
+    const waitUntilReady = ({ timeoutMs = 20000 } = {}) =>
+      new Promise((resolve, reject) => {
+        const startedAt = Date.now()
+
+        const checkReadiness = () => {
+          if (loadErrorMessage) {
+            reject(new Error(loadErrorMessage))
+            return
+          }
+
+          if (hasLoadedModel && didFinishLoading) {
+            resolve({
+              modelUrl,
+              animationSelectionKey,
+            })
+            return
+          }
+
+          if (Date.now() - startedAt >= timeoutMs) {
+            reject(new Error('3D viewer did not finish loading in time.'))
+            return
+          }
+
+          window.setTimeout(checkReadiness, 50)
+        }
+
+        checkReadiness()
+      })
+
     if (typeof onCaptureApiReady === 'function') {
-      onCaptureApiReady({ captureEightViews, captureAnimatedSpriteDirections })
+      onCaptureApiReady({
+        captureEightViews,
+        captureAnimatedSpriteDirections,
+        waitUntilReady,
+        getCurrentModelUrl: () => modelUrl,
+        getCurrentAnimationSelection: () => animationSelectionKey,
+      })
     }
 
     loader.load(
@@ -381,7 +474,11 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
         scene.add(floorGrid)
         hasLoadedModel = true
         targetSkinnedMesh = findFirstSkinnedMesh(loadedScene)
-        const embeddedClip = chooseIdleLikeClip(gltf.animations || [])
+        const embeddedClip = resolveRequestedAnimationClip(gltf.animations || [], {
+          animationSelectionKey,
+          animationClipIndex,
+          animationClipName,
+        })
 
         if (embeddedClip) {
           activeAnimationDuration = embeddedClip.duration || 0
@@ -390,16 +487,18 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
           action.reset()
           action.setLoop(THREE.LoopRepeat, Infinity)
           action.play()
+          didFinishLoading = true
           setIsLoading(false)
           return
         }
 
-        if (targetSkinnedMesh) {
+        if (targetSkinnedMesh && normalizeAnimationToken(animationSelectionKey) !== 'apose') {
           fbxLoader.load(
             '/Walking.fbx',
             (fbx) => {
               const sourceClip = fbx.animations?.[0]
               if (!sourceClip) {
+                didFinishLoading = true
                 setIsLoading(false)
                 return
               }
@@ -428,22 +527,26 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
               action.reset()
               action.setLoop(THREE.LoopRepeat, Infinity)
               action.play()
+              didFinishLoading = true
               setIsLoading(false)
             },
             undefined,
             () => {
+              didFinishLoading = true
               setIsLoading(false)
             },
           )
           return
         }
 
+        didFinishLoading = true
         setIsLoading(false)
       },
       undefined,
       (error) => {
+        loadErrorMessage = error?.message || 'Failed to load the 3D preview.'
         setIsLoading(false)
-        setViewerError(error?.message || 'Failed to load the 3D preview.')
+        setViewerError(loadErrorMessage)
       },
     )
 
@@ -491,7 +594,13 @@ export function ModelViewer({ modelUrl, resetSignal = 0, onCaptureApiReady = nul
         container.removeChild(renderer.domElement)
       }
     }
-  }, [modelUrl, onCaptureApiReady])
+  }, [
+    animationClipIndex,
+    animationClipName,
+    animationSelectionKey,
+    modelUrl,
+    onCaptureApiReady,
+  ])
 
   useEffect(() => {
     if (resetSignal > 0 && controlsRef.current) {

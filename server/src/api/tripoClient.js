@@ -149,13 +149,24 @@ export const createTripoClient = ({ apiKey, baseUrl, auditLogger = null }) => {
     async createAnimationTask({
       originalModelTaskId,
       animation = 'idle',
+      animations = [],
       taskType = 'animate_model',
       animateInPlace = null,
     }) {
+      const normalizedAnimations = Array.isArray(animations)
+        ? animations
+            .map((value) => String(value || '').trim())
+            .filter(Boolean)
+        : []
       const requestBody = {
         type: taskType,
         original_model_task_id: originalModelTaskId,
-        animation,
+      }
+
+      if (normalizedAnimations.length > 0) {
+        requestBody.animations = normalizedAnimations
+      } else {
+        requestBody.animation = animation
       }
 
       if (taskType === 'animate_retarget' && animateInPlace !== null) {

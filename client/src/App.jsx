@@ -39,6 +39,7 @@ const EMPTY_JOB = {
   error: '',
   outputs: null,
   animationMode: '',
+  requestedAnimations: [],
 }
 
 const hasCompleteTurnaround = (views) =>
@@ -103,12 +104,54 @@ const DEFAULT_SPRITE_FILES = {
   left: '/default-sprites/left.gif',
   front_left: '/default-sprites/front_left.gif',
 }
+const STEP03_PREVIEW_OPTIONS = Object.freeze([
+  { key: 'apose', label: 'A-pose', preset: '', isAnimated: false },
+  { key: 'idle', label: 'Idle', preset: 'preset:biped:wait', isAnimated: true },
+  { key: 'walk', label: 'Walk', preset: 'preset:walk', isAnimated: true },
+  { key: 'run', label: 'Run', preset: 'preset:run', isAnimated: true },
+  { key: 'slash', label: 'Slash', preset: 'preset:slash', isAnimated: true },
+])
+const ANIMATION_PREVIEW_OPTIONS = Object.freeze(
+  STEP03_PREVIEW_OPTIONS.filter((option) => option.isAnimated),
+)
+const ANIMATION_PREVIEW_KEYS = Object.freeze(
+  ANIMATION_PREVIEW_OPTIONS.map((option) => option.key),
+)
+const SPRITE_360_PREVIEW_KEY = 'view_360'
+const SPRITE_PREVIEW_OPTIONS = Object.freeze([
+  { key: SPRITE_360_PREVIEW_KEY, label: '360' },
+  ...ANIMATION_PREVIEW_OPTIONS.map((option) => ({
+    key: option.key,
+    label: option.label,
+  })),
+])
+const ANIMATION_PRESET_BY_KEY = Object.freeze(
+  Object.fromEntries(ANIMATION_PREVIEW_OPTIONS.map((option) => [option.key, option.preset])),
+)
+const ANIMATION_LABEL_BY_KEY = Object.freeze(
+  Object.fromEntries(ANIMATION_PREVIEW_OPTIONS.map((option) => [option.key, option.label])),
+)
+const ANIMATION_KEY_BY_PRESET = Object.freeze(
+  ANIMATION_PREVIEW_OPTIONS.reduce((lookup, option) => {
+    lookup[option.key] = option.key
+    lookup[option.preset.toLowerCase()] = option.key
+    lookup[`preset:biped:${option.key}`] = option.key
+    if (option.key === 'idle') {
+      lookup['preset:idle'] = option.key
+      lookup['preset:biped:idle'] = option.key
+    }
+    return lookup
+  }, {}),
+)
+const FIXED_RETARGET_ANIMATIONS = Object.freeze(
+  ANIMATION_PREVIEW_OPTIONS.map((option) => option.preset),
+)
+const DEFAULT_ANIMATED_PREVIEW_KEY = 'idle'
+const DEFAULT_SPRITE_PREVIEW_KEY = SPRITE_360_PREVIEW_KEY
+const LEGACY_ANIMATED_PREVIEW_KEY = 'walk'
 const DEFAULT_PROGRESS_BOUNDARIES = Object.freeze([0.2, 0.34, 0.8, 1])
 const PIPELINE_POLL_INTERVAL_MS = 3000
-const SPRITE_REQUIRED_KEYS = Object.freeze([
-  'view_360',
-  ...MODEL_VIEW_CAPTURE_ORDER.map((view) => view.key),
-])
+const SPRITE_CAPTURE_REQUIRED_KEYS = Object.freeze(MODEL_VIEW_CAPTURE_ORDER.map((view) => view.key))
 const PIPELINE_INITIAL_STATE = Object.freeze({
   unlocked: Object.freeze({
     step1: true,
@@ -134,6 +177,7 @@ const SPRITE_DIRECTION_ALIASES = Object.freeze({
   left: ['left'],
   front_left: ['front_left', 'frontLeft', 'frontleft'],
 })
+const ANIMATED_TASK_TYPES = new Set(['animate_retarget', 'animate_model'])
 
 const createInitialPipelineState = () => ({
   unlocked: { ...PIPELINE_INITIAL_STATE.unlocked },
@@ -426,6 +470,150 @@ const sanitizeProviderNames = (value) =>
     .replace(/gemini/gi, 'image service')
 
 const clampToProgressRange = (value) => Math.min(1, Math.max(0, Number(value) || 0))
+const sleep = (durationMs) => new Promise((resolve) => window.setTimeout(resolve, durationMs))
+
+const normalizeRequestedAnimations = (value) => {
+  const sourceValues = Array.isArray(value) ? value : value ? [value] : []
+  const seenValues = new Set()
+  const normalizedValues = []
+
+  for (const entry of sourceValues) {
+    const animationPreset = String(entry || '').trim()
+    if (!animationPreset) {
+      continue
+    }
+
+    const dedupeKey = animationPreset.toLowerCase()
+    if (seenValues.has(dedupeKey)) {
+      continue
+    }
+
+    seenValues.add(dedupeKey)
+    normalizedValues.push(animationPreset)
+  }
+
+  return normalizedValues
+}
+
+const normalizeAnimationPreviewKey = (value, fallback = 'apose') => {
+  const normalizedValue = String(value || '').trim().toLowerCase()
+  if (normalizedValue === 'apose') {
+    return 'apose'
+  }
+
+  return STEP03_PREVIEW_OPTIONS.some((option) => option.key === normalizedValue)
+    ? normalizedValue
+    : fallback
+}
+
+const getAnimationKeyFromPreset = (value) => ANIMATION_KEY_BY_PRESET[String(value || '').trim().toLowerCase()] || ''
+
+const resolveSingleAnimationPreviewKey = (
+  value,
+  fallback = LEGACY_ANIMATED_PREVIEW_KEY,
+) => {
+  const normalizedValue = String(value || '').trim()
+  if (!normalizedValue) {
+    return DEFAULT_ANIMATED_PREVIEW_KEY
+  }
+
+  return getAnimationKeyFromPreset(normalizedValue) || fallback
+}
+
+const resolveLegacyAnimationOutputKey = (job) => {
+  const requestedAnimationKeys = normalizeRequestedAnimations(job?.requestedAnimations)
+    .map((animationPreset) => getAnimationKeyFromPreset(animationPreset))
+    .filter(Boolean)
+
+  if (requestedAnimationKeys.includes(DEFAULT_ANIMATED_PREVIEW_KEY)) {
+    return DEFAULT_ANIMATED_PREVIEW_KEY
+  }
+
+  return requestedAnimationKeys[0] || LEGACY_ANIMATED_PREVIEW_KEY
+}
+
+const getAnimationOutputCatalog = (job) => {
+  const animationOutputs = job?.outputs?.animations
+  if (animationOutputs && typeof animationOutputs === 'object') {
+    const normalizedCatalog = Object.fromEntries(
+      Object.entries(animationOutputs).filter(([, entry]) => entry && typeof entry === 'object'),
+    )
+    if (Object.keys(normalizedCatalog).length > 0) {
+      return normalizedCatalog
+    }
+  }
+
+  const normalizedTaskType = getNormalizedTaskType(job?.taskType)
+  const hasLegacyAnimatedOutput =
+    ANIMATED_TASK_TYPES.has(normalizedTaskType) &&
+    (job?.outputs?.modelUrl ||
+      job?.outputs?.downloadUrl ||
+      job?.outputs?.variants?.animation_model ||
+      job?.outputs?.variants?.animated_model ||
+      ['animation_model', 'animated_model'].includes(String(job?.outputs?.variant || '').trim()))
+
+  if (!hasLegacyAnimatedOutput) {
+    return null
+  }
+
+  const legacyAnimationOutputKey = resolveLegacyAnimationOutputKey(job)
+
+  return {
+    [legacyAnimationOutputKey]: {
+      preset: ANIMATION_PRESET_BY_KEY[legacyAnimationOutputKey] || '',
+      label: ANIMATION_LABEL_BY_KEY[legacyAnimationOutputKey] || legacyAnimationOutputKey,
+      variant: job?.outputs?.variant || '',
+      modelUrl: job?.outputs?.modelUrl || '',
+      downloadUrl: job?.outputs?.downloadUrl || '',
+      variants: job?.outputs?.variants || null,
+    },
+  }
+}
+
+const hasUsableAnimationOutput = (entry) =>
+  Boolean(
+    entry?.modelUrl ||
+      entry?.downloadUrl ||
+      (entry?.variants && typeof entry.variants === 'object' && Object.keys(entry.variants).length > 0),
+  )
+
+const getAvailableAnimationOutputKeys = (job) => {
+  const animationCatalog = getAnimationOutputCatalog(job)
+  return ANIMATION_PREVIEW_KEYS.filter((animationKey) =>
+    hasUsableAnimationOutput(animationCatalog?.[animationKey]),
+  )
+}
+
+const resolvePreferredAnimatedPreviewKey = (job) => {
+  const availableAnimationKeys = getAvailableAnimationOutputKeys(job)
+  if (availableAnimationKeys.includes(DEFAULT_ANIMATED_PREVIEW_KEY)) {
+    return DEFAULT_ANIMATED_PREVIEW_KEY
+  }
+
+  return availableAnimationKeys[0] || ''
+}
+
+const resolveAnimationPreviewOutput = (job, animationKey) =>
+  getAnimationOutputCatalog(job)?.[animationKey] || null
+
+const getAnimationPreviewModelUrl = (job, animationKey) => {
+  const animationOutput = resolveAnimationPreviewOutput(job, animationKey)
+  if (!animationOutput) {
+    return ''
+  }
+
+  const preferredVariant =
+    (String(animationOutput?.variant || '').trim() &&
+      animationOutput?.variants?.[animationOutput.variant]
+      ? animationOutput.variant
+      : '') || findFirstAvailableVariant(animationOutput?.variants, ANIMATED_MODEL_VARIANT_PRIORITY)
+
+  return (
+    animationOutput?.modelUrl ||
+    (preferredVariant && animationOutput?.variants?.[preferredVariant]) ||
+    ''
+  )
+}
 
 const resolveSpriteDirection = (directions, key) => {
   if (!directions || typeof directions !== 'object') {
@@ -459,16 +647,89 @@ const hasUsableSpriteDirection = (direction) => {
   return Boolean(direction.previewDataUrl)
 }
 
-const hasRequiredSpriteBundle = (spritePayload) => {
-  const directions = spritePayload?.directions
+const resolveSpriteAnimationEntry = (spritePayload, animationKey) => {
+  if (!spritePayload || typeof spritePayload !== 'object') {
+    return null
+  }
+
+  if (spritePayload?.animations && typeof spritePayload.animations === 'object') {
+    return spritePayload.animations?.[animationKey] || null
+  }
+
+  if (
+    spritePayload?.directions &&
+    typeof spritePayload.directions === 'object' &&
+    (animationKey === spritePayload?.animation || animationKey === LEGACY_ANIMATED_PREVIEW_KEY)
+  ) {
+    return {
+      animation: animationKey,
+      directions: spritePayload.directions,
+    }
+  }
+
+  return null
+}
+
+const resolveSpriteAnimationDirections = (spritePayload, animationKey) => {
+  const animationEntry = resolveSpriteAnimationEntry(spritePayload, animationKey)
+  return animationEntry?.directions || null
+}
+
+const resolveSharedSpriteDirections = (spritePayload) => {
+  if (!spritePayload || typeof spritePayload !== 'object') {
+    return null
+  }
+
+  if (spritePayload?.sharedDirections && typeof spritePayload.sharedDirections === 'object') {
+    return spritePayload.sharedDirections
+  }
+
+  const idleDirections = resolveSpriteAnimationDirections(spritePayload, DEFAULT_ANIMATED_PREVIEW_KEY)
+  const legacyDirections =
+    spritePayload?.directions && typeof spritePayload.directions === 'object'
+      ? spritePayload.directions
+      : null
+  const shared360Direction =
+    resolveSpriteDirection(idleDirections, SPRITE_360_PREVIEW_KEY) ||
+    resolveSpriteDirection(legacyDirections, SPRITE_360_PREVIEW_KEY)
+
+  return shared360Direction
+    ? {
+        [SPRITE_360_PREVIEW_KEY]: shared360Direction,
+      }
+    : null
+}
+
+const hasRequiredSpriteDirections = (directions) => {
   if (!directions || typeof directions !== 'object') {
     return false
   }
 
-  return SPRITE_REQUIRED_KEYS.every((directionKey) =>
+  return SPRITE_CAPTURE_REQUIRED_KEYS.every((directionKey) =>
     hasUsableSpriteDirection(resolveSpriteDirection(directions, directionKey)),
   )
 }
+
+const hasSharedSpritePreview = (spritePayload) =>
+  hasUsableSpriteDirection(
+    resolveSpriteDirection(resolveSharedSpriteDirections(spritePayload), SPRITE_360_PREVIEW_KEY),
+  )
+
+const getAvailableSpriteAnimationKeys = (spritePayload) =>
+  ANIMATION_PREVIEW_KEYS.filter((animationKey) =>
+    hasRequiredSpriteDirections(resolveSpriteAnimationDirections(spritePayload, animationKey)),
+  )
+
+const getAvailableSpritePreviewKeys = (spritePayload) => [
+  ...(hasSharedSpritePreview(spritePayload) ? [SPRITE_360_PREVIEW_KEY] : []),
+  ...getAvailableSpriteAnimationKeys(spritePayload),
+]
+
+const hasRequiredSpriteBundle = (spritePayload) =>
+  hasSharedSpritePreview(spritePayload) &&
+  ANIMATION_PREVIEW_KEYS.every((animationKey) =>
+    hasRequiredSpriteDirections(resolveSpriteAnimationDirections(spritePayload, animationKey)),
+  )
 
 const normalizePipelineState = (value) => {
   if (!value || typeof value !== 'object') {
@@ -532,10 +793,27 @@ const hasUsableModelOutput = (job) =>
       (job?.outputs?.variants && Object.keys(job.outputs.variants).length > 0),
   )
 
+const hasRequiredAnimationCatalogOutput = (job) => {
+  const animationCatalog = getAnimationOutputCatalog(job)
+  return ANIMATION_PREVIEW_KEYS.every((animationKey) =>
+    hasUsableAnimationOutput(animationCatalog?.[animationKey]),
+  )
+}
+
 const hasExpectedTaskOutput = (job) => {
   const normalizedTaskType = getNormalizedTaskType(job?.taskType)
 
   if (normalizedTaskType === 'animate_retarget' || normalizedTaskType === 'animate_model') {
+    const requestedAnimationKeys = normalizeRequestedAnimations(job?.requestedAnimations)
+      .map((animationPreset) => getAnimationKeyFromPreset(animationPreset))
+      .filter(Boolean)
+    if (
+      requestedAnimationKeys.length > 1 ||
+      (job?.outputs?.animations && typeof job.outputs.animations === 'object')
+    ) {
+      return hasRequiredAnimationCatalogOutput(job)
+    }
+
     return hasVariantOutput(job, ANIMATED_MODEL_VARIANT_PRIORITY)
   }
 
@@ -627,7 +905,7 @@ const derivePipelineStateFromArtifacts = ({
   const normalizedStep03TaskState = normalizeStep03TaskState(step03TaskState)
   const hasAnimatedModel = Boolean(
     tripoJob?.status === 'success' &&
-      hasUsableModelOutput(tripoJob) &&
+      hasExpectedTaskOutput(tripoJob) &&
       ['animate_retarget', 'animate_model'].includes(getNormalizedTaskType(tripoJob?.taskType)) &&
       (!normalizedStep03TaskState.animateTaskId ||
         normalizedStep03TaskState.animateTaskId === tripoJob?.taskId),
@@ -802,7 +1080,7 @@ function App() {
   const [isCapturingWalkSprites, setIsCapturingWalkSprites] = useState(false)
   const [isBuildingModelViewGif, setIsBuildingModelViewGif] = useState(false)
   const [modelPreviewMode, setModelPreviewMode] = useState('apose')
-  const [spritePreviewMode, setSpritePreviewMode] = useState('walk_8')
+  const [spritePreviewMode, setSpritePreviewMode] = useState(DEFAULT_SPRITE_PREVIEW_KEY)
   const [defaultSpritesCacheKey, setDefaultSpritesCacheKey] = useState(() => Date.now())
   const [existingTripoTaskIdInput, setExistingTripoTaskIdInput] = useState('')
   const [animateRigTaskIdInput, setAnimateRigTaskIdInput] = useState('')
@@ -826,36 +1104,82 @@ function App() {
   const step02PanelRef = useRef(null)
   const step03BoundaryRef = useRef(null)
   const modelOutputVariants = tripoJob.outputs?.variants || null
+  const animationOutputCatalog = getAnimationOutputCatalog(tripoJob)
+  const availableAnimatedPreviewKeys = getAvailableAnimationOutputKeys(tripoJob)
   const hasModelViewPack = MODEL_VIEW_CAPTURE_ORDER.some((view) => Boolean(modelViewPack?.[view.key]?.dataUrl))
   const availableModelVariants = MODEL_OUTPUT_VARIANT_ORDER.filter((variant) =>
     Boolean(modelOutputVariants?.[variant]),
   )
-  const animatedModelVariant = findFirstAvailableVariant(
-    modelOutputVariants,
-    ANIMATED_MODEL_VARIANT_PRIORITY,
-  )
+  const resolvedAnimatedPreviewKey =
+    modelPreviewMode === 'apose'
+      ? ''
+      : availableAnimatedPreviewKeys.includes(modelPreviewMode)
+        ? modelPreviewMode
+        : resolvePreferredAnimatedPreviewKey(tripoJob)
+  const resolvedAnimatedOutput = resolvedAnimatedPreviewKey
+    ? animationOutputCatalog?.[resolvedAnimatedPreviewKey] || null
+    : null
+  const resolvedAnimatedVariants = resolvedAnimatedOutput?.variants || null
+  const animatedModelVariant =
+    (String(resolvedAnimatedOutput?.variant || '').trim() &&
+      resolvedAnimatedVariants?.[resolvedAnimatedOutput.variant]
+      ? resolvedAnimatedOutput.variant
+      : '') || findFirstAvailableVariant(resolvedAnimatedVariants, ANIMATED_MODEL_VARIANT_PRIORITY)
   const aposeModelVariant = findFirstAvailableVariant(modelOutputVariants, APOSE_MODEL_VARIANT_PRIORITY)
   const requestedModelVariant = modelPreviewMode === 'apose' ? aposeModelVariant : animatedModelVariant
-  const fallbackModelVariant = modelPreviewMode === 'apose' ? animatedModelVariant : aposeModelVariant
+  const fallbackModelVariant =
+    modelPreviewMode === 'apose'
+      ? animatedModelVariant ||
+        findFirstAvailableVariant(modelOutputVariants, ANIMATED_MODEL_VARIANT_PRIORITY)
+      : aposeModelVariant
   const resolvedModelVariant =
     requestedModelVariant ||
     fallbackModelVariant ||
     (tripoJob.outputs?.variant && availableModelVariants.includes(tripoJob.outputs.variant)
       ? tripoJob.outputs.variant
       : availableModelVariants[0] || '')
-  const isPreviewModeUnavailable = Boolean(tripoJob.taskId && !requestedModelVariant)
+  const isPreviewModeUnavailable = Boolean(
+    tripoJob.taskId &&
+      modelPreviewMode !== 'apose' &&
+      modelPreviewMode !== resolvedAnimatedPreviewKey,
+  )
+  const activeViewerAnimationSelectionKey =
+    modelPreviewMode === 'apose' ? 'apose' : resolvedAnimatedPreviewKey || modelPreviewMode
+  const activeViewerAnimationClipIndex =
+    modelPreviewMode !== 'apose' && Number.isInteger(resolvedAnimatedOutput?.clipIndex)
+      ? resolvedAnimatedOutput.clipIndex
+      : null
   const activeModelUrl =
-    (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
-    tripoJob.outputs?.modelUrl ||
-    ''
+    modelPreviewMode === 'apose'
+      ? (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) || tripoJob.outputs?.modelUrl || ''
+      : resolvedAnimatedOutput?.modelUrl ||
+        (animatedModelVariant && resolvedAnimatedVariants?.[animatedModelVariant]) ||
+        (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
+        (resolvedAnimatedPreviewKey === DEFAULT_ANIMATED_PREVIEW_KEY ? tripoJob.outputs?.modelUrl || '' : '')
   const activeDownloadUrl =
-    (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
-    tripoJob.outputs?.downloadUrl ||
-    ''
+    modelPreviewMode === 'apose'
+      ? (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
+        tripoJob.outputs?.downloadUrl ||
+        ''
+      : resolvedAnimatedOutput?.downloadUrl ||
+        (animatedModelVariant && resolvedAnimatedVariants?.[animatedModelVariant]) ||
+        (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
+        (resolvedAnimatedPreviewKey === DEFAULT_ANIMATED_PREVIEW_KEY
+          ? tripoJob.outputs?.downloadUrl || ''
+          : '')
+  const availableSpritePreviewKeys = getAvailableSpritePreviewKeys(spriteResult)
+  const resolvedSpritePreviewMode = availableSpritePreviewKeys.includes(spritePreviewMode)
+    ? spritePreviewMode
+    : availableSpritePreviewKeys.includes(DEFAULT_SPRITE_PREVIEW_KEY)
+      ? DEFAULT_SPRITE_PREVIEW_KEY
+      : availableSpritePreviewKeys.includes(DEFAULT_ANIMATED_PREVIEW_KEY)
+        ? DEFAULT_ANIMATED_PREVIEW_KEY
+        : availableSpritePreviewKeys[0] || DEFAULT_SPRITE_PREVIEW_KEY
   const activeSpriteDirections = devSettings.defaultSpritesEnabled
     ? buildDefaultSpriteDirections(defaultSpritesCacheKey)
-    : spriteResult?.directions
-  const resolvedSpritePreviewMode = spritePreviewMode === 'view_360' ? 'view_360' : 'walk_8'
+    : resolvedSpritePreviewMode === SPRITE_360_PREVIEW_KEY
+      ? resolveSharedSpriteDirections(spriteResult)
+      : resolveSpriteAnimationDirections(spriteResult, resolvedSpritePreviewMode)
   const isStep01Unlocked = pipelineState.unlocked.step1
   const isStep02Unlocked = pipelineState.unlocked.step2
   const isStep03Unlocked = pipelineState.unlocked.step3
@@ -864,11 +1188,12 @@ function App() {
   const hasStep03ModelTask = Boolean(step03TaskState.modelTaskId)
   const hasStep03RigTask = Boolean(step03TaskState.rigTaskId)
   const hasStep03AnimateTask = Boolean(step03TaskState.animateTaskId)
+  const normalizedCurrentTripoTaskType = getNormalizedTaskType(tripoJob.taskType)
   const retargetStartTaskId =
-    tripoJob.taskType === 'animate_rig'
+    normalizedCurrentTripoTaskType === 'animate_rig'
       ? tripoJob.taskId
-      : ['animate_retarget', 'animate_model'].includes(tripoJob.taskType)
-        ? tripoJob.taskId
+      : ANIMATED_TASK_TYPES.has(normalizedCurrentTripoTaskType)
+        ? tripoJob.sourceTaskId || tripoJob.taskId
         : ''
   const canCreateModel = hasCompleteTurnaround(multiviewResult?.views)
   const canCreateFrontBackModel = Boolean(
@@ -915,7 +1240,7 @@ function App() {
   const canApproveStep03 = isStep03Unlocked && hasStep03ChainResult && !isCreatingRetargetTask
   const canRunStep04Generation =
     isStep04Unlocked &&
-    Boolean(activeModelUrl) &&
+    hasRequiredAnimationCatalogOutput(tripoJob) &&
     !isGeneratingSprite &&
     !isCapturingWalkSprites &&
     !isPreparingDownloadBundle
@@ -1126,7 +1451,9 @@ function App() {
           session.multiviewResult?.views ? session.multiviewResult : currentMultiviewResult,
         )
         setSpriteResult((currentSpriteResult) =>
-          session.spriteResult?.directions ? session.spriteResult : currentSpriteResult,
+          session.spriteResult?.animations || session.spriteResult?.directions
+            ? session.spriteResult
+            : currentSpriteResult,
         )
         setCurrentRunId((currentRunIdValue) => session.currentRunId || currentRunIdValue)
         setHistory((currentHistory) =>
@@ -1140,6 +1467,9 @@ function App() {
                 animationMode:
                   normalizeAnimationMode(session.tripoJob?.animationMode) ||
                   normalizeAnimationMode(session.devSettings?.tripoAnimationMode),
+                requestedAnimations: normalizeRequestedAnimations(
+                  session.tripoJob?.requestedAnimations,
+                ),
               }
             : currentTripoJob,
         )
@@ -1218,7 +1548,7 @@ function App() {
 
   useEffect(() => {
     setModelViewPack(null)
-  }, [activeModelUrl])
+  }, [activeModelUrl, activeViewerAnimationSelectionKey])
 
   useEffect(() => {
     if (!tripoJob.taskId) {
@@ -1226,20 +1556,38 @@ function App() {
       return
     }
 
-    setModelPreviewMode(
-      tripoJob.taskType === 'animate_retarget' || tripoJob.taskType === 'animate_model'
-        ? 'animated'
-        : 'apose',
-    )
-  }, [tripoJob.taskId, tripoJob.taskType])
+    const normalizedTaskType = getNormalizedTaskType(tripoJob.taskType)
+    if (!ANIMATED_TASK_TYPES.has(normalizedTaskType)) {
+      setModelPreviewMode('apose')
+      return
+    }
+
+    setModelPreviewMode((currentMode) => {
+      if (currentMode !== 'apose' && STEP03_PREVIEW_OPTIONS.some((option) => option.key === currentMode)) {
+        return currentMode
+      }
+
+      return resolvePreferredAnimatedPreviewKey(tripoJob) || 'apose'
+    })
+  }, [tripoJob])
 
   useEffect(() => {
-    const isAnimationTask =
-      tripoJob.taskType === 'animate_retarget' || tripoJob.taskType === 'animate_model'
-    if (isAnimationTask && tripoJob.status === 'success') {
-      setModelPreviewMode('animated')
-    }
-  }, [tripoJob.status, tripoJob.taskType])
+    setSpritePreviewMode((currentMode) => {
+      if (availableSpritePreviewKeys.includes(currentMode)) {
+        return currentMode
+      }
+
+      if (availableSpritePreviewKeys.includes(DEFAULT_SPRITE_PREVIEW_KEY)) {
+        return DEFAULT_SPRITE_PREVIEW_KEY
+      }
+
+      if (availableSpritePreviewKeys.includes(DEFAULT_ANIMATED_PREVIEW_KEY)) {
+        return DEFAULT_ANIMATED_PREVIEW_KEY
+      }
+
+      return availableSpritePreviewKeys[0] || DEFAULT_SPRITE_PREVIEW_KEY
+    })
+  }, [availableSpritePreviewKeys])
 
   const handleViewerCaptureApiReady = useCallback((captureApi) => {
     viewerCaptureApiRef.current = captureApi || null
@@ -1340,7 +1688,14 @@ function App() {
   )
 
   const applyTripoJobUpdate = (nextJob, runId = currentRunId) => {
-    setTripoJob((currentJob) => ({ ...currentJob, ...nextJob }))
+    setTripoJob((currentJob) => ({
+      ...currentJob,
+      ...nextJob,
+      requestedAnimations:
+        nextJob?.requestedAnimations !== undefined
+          ? normalizeRequestedAnimations(nextJob.requestedAnimations)
+          : currentJob?.requestedAnimations || [],
+    }))
     setStep03TaskState((currentState) => mergeStep03TaskStateWithJob(currentState, nextJob))
     if (nextJob?.taskId) {
       const normalizedStatus = String(nextJob.status || '').trim().toLowerCase()
@@ -1371,7 +1726,12 @@ function App() {
 
   const applyTripoTaskStart = (
     result,
-    { animationMode = '', fallbackTaskType = '', fallbackSourceTaskId = '' } = {},
+    {
+      animationMode = '',
+      fallbackTaskType = '',
+      fallbackSourceTaskId = '',
+      requestedAnimations = [],
+    } = {},
   ) => {
     const nextJob = {
       taskId: result.taskId,
@@ -1382,6 +1742,7 @@ function App() {
       error: result.error || '',
       outputs: null,
       animationMode,
+      requestedAnimations: normalizeRequestedAnimations(requestedAnimations),
     }
     setTripoJob(nextJob)
     setStep03TaskState((currentState) => mergeStep03TaskStateWithJob(currentState, nextJob))
@@ -1499,7 +1860,47 @@ function App() {
     [buildGifBlobFromFrames],
   )
 
-  const buildViewerWalkDirections = useCallback(async (capturedDirections, captureSize) => {
+  const buildSynthesized360Direction = useCallback((directions) => {
+    const orderedFrames = []
+    let frameDelay = 110
+
+    for (const view of MODEL_VIEW_CAPTURE_ORDER) {
+      const direction = resolveSpriteDirection(directions, view.key)
+      if (!hasUsableSpriteDirection(direction)) {
+        continue
+      }
+
+      if (Number(direction?.delayMs) > 0) {
+        frameDelay = Number(direction.delayMs)
+      }
+
+      if (Array.isArray(direction?.frameDataUrls) && direction.frameDataUrls.length > 0) {
+        orderedFrames.push(...direction.frameDataUrls.filter(Boolean))
+        continue
+      }
+
+      if (direction?.previewDataUrl) {
+        orderedFrames.push(direction.previewDataUrl)
+      }
+    }
+
+    if (orderedFrames.length === 0) {
+      return null
+    }
+
+    return {
+      previewDataUrl: orderedFrames[0] || '',
+      frameDataUrls: orderedFrames,
+      delayMs: frameDelay,
+      source: 'viewer-360-synthesis',
+      frames: {
+        count: orderedFrames.length,
+        format: 'base64-frame-sequence',
+      },
+    }
+  }, [])
+
+  const buildViewerAnimationDirections = useCallback(async (capturedDirections, captureSize) => {
     const resizedEntries = await Promise.all(
       MODEL_VIEW_CAPTURE_ORDER.map(async (view) => {
         const directionCapture = capturedDirections?.[view.key]
@@ -1518,7 +1919,7 @@ function App() {
             previewDataUrl: resizedFrames[0] || '',
             frameDataUrls: resizedFrames,
             delayMs: directionCapture.delayMs,
-            source: 'viewer-walk-capture',
+            source: 'viewer-animation-capture',
             frames: {
               count: resizedFrames.length,
               format: 'base64-frame-sequence',
@@ -1530,6 +1931,63 @@ function App() {
 
     return Object.fromEntries(resizedEntries.filter((entry) => Boolean(entry[1])))
   }, [])
+
+  const buildViewerSnapshotDirections = useCallback(async (captures, captureSize) => {
+    const resizedEntries = await Promise.all(
+      MODEL_VIEW_CAPTURE_ORDER.map(async (view) => {
+        const screenshot = captures?.[view.key]
+        if (!screenshot?.dataUrl) {
+          return [view.key, null]
+        }
+
+        const resizedDataUrl = await resizeDataUrlForModelView(screenshot.dataUrl, captureSize)
+        return [
+          view.key,
+          {
+            previewDataUrl: resizedDataUrl,
+            frameDataUrls: [resizedDataUrl],
+            source: 'viewer-static-capture',
+            frames: {
+              count: 1,
+              format: 'base64-frame-sequence',
+            },
+          },
+        ]
+      }),
+    )
+
+    return Object.fromEntries(resizedEntries.filter((entry) => Boolean(entry[1])))
+  }, [])
+
+  const waitForViewerModel = useCallback(
+    async (expectedModelUrl, expectedAnimationSelectionKey = 'apose', timeoutMs = 30000) => {
+      const startedAt = Date.now()
+
+      while (Date.now() - startedAt < timeoutMs) {
+        const captureApi = viewerCaptureApiRef.current
+        const currentAnimationSelectionKey = captureApi?.getCurrentAnimationSelection?.()
+        const hasExpectedAnimationSelection =
+          !expectedAnimationSelectionKey ||
+          typeof captureApi?.getCurrentAnimationSelection !== 'function' ||
+          currentAnimationSelectionKey === expectedAnimationSelectionKey
+
+        if (captureApi?.getCurrentModelUrl?.() === expectedModelUrl && hasExpectedAnimationSelection) {
+          if (typeof captureApi.waitUntilReady === 'function') {
+            await captureApi.waitUntilReady({
+              timeoutMs: Math.max(1000, timeoutMs - (Date.now() - startedAt)),
+            })
+          }
+
+          return captureApi
+        }
+
+        await sleep(50)
+      }
+
+      throw new Error('3D viewer did not switch to the requested animation in time.')
+    },
+    [],
+  )
 
   useEffect(() => {
     if (!shouldContinuePollingTripoJob(tripoJob)) {
@@ -1575,7 +2033,16 @@ function App() {
       isCancelled = true
       window.clearInterval(intervalId)
     }
-  }, [currentRunId, devSettings.tripoAnimationMode, tripoJob.animationMode, tripoJob.taskId, tripoJob.status])
+  }, [
+    currentRunId,
+    devSettings.tripoAnimationMode,
+    tripoJob.animationMode,
+    tripoJob.outputs,
+    tripoJob.requestedAnimations,
+    tripoJob.taskId,
+    tripoJob.taskType,
+    tripoJob.status,
+  ])
 
   const runMultiviewGeneration = async ({
     mode = 'full',
@@ -1750,7 +2217,21 @@ function App() {
         spriteSize: Number(devSettings.spriteSize) || DEV_PRESETS.spriteSize,
       })
 
-      setSpriteResult(result)
+      setSpriteResult({
+        animation: LEGACY_ANIMATED_PREVIEW_KEY,
+        spriteSize: Number(result?.spriteSize) || normalizeSpriteSize(devSettings.spriteSize),
+        directions: result?.directions || null,
+        animations: result?.directions
+          ? {
+              [LEGACY_ANIMATED_PREVIEW_KEY]: {
+                animation: LEGACY_ANIMATED_PREVIEW_KEY,
+                label: ANIMATION_LABEL_BY_KEY[LEGACY_ANIMATED_PREVIEW_KEY],
+                preset: ANIMATION_PRESET_BY_KEY[LEGACY_ANIMATED_PREVIEW_KEY] || '',
+                directions: result.directions,
+              },
+            }
+          : null,
+      })
     } catch (requestError) {
       setError(requestError.message)
     } finally {
@@ -1767,64 +2248,44 @@ function App() {
     }
 
     if (!activeModelUrl) {
-      setError('Load an animated model before capturing walk sprites.')
+      setError('Load an animated model before capturing animated sprites.')
       return
     }
 
     setError('')
     setIsCapturingWalkSprites(true)
     const captureSize = normalizeSpriteSize(devSettings.spriteSize)
+    const animationKey =
+      modelPreviewMode !== 'apose' && ANIMATION_PREVIEW_KEYS.includes(modelPreviewMode)
+        ? modelPreviewMode
+        : LEGACY_ANIMATED_PREVIEW_KEY
 
     try {
       const capturedDirections = await captureApi.captureAnimatedSpriteDirections()
-      const resizedEntries = await Promise.all(
-        MODEL_VIEW_CAPTURE_ORDER.map(async (view) => {
-          const directionCapture = capturedDirections?.[view.key]
-          if (!directionCapture?.frameDataUrls?.length) {
-            return [view.key, null]
-          }
-
-          const resizedFrames = await resizeFrameSequenceForModelView(
-            directionCapture.frameDataUrls,
-            captureSize,
-          )
-
-          return [
-            view.key,
-            {
-              previewDataUrl: resizedFrames[0] || '',
-              frameDataUrls: resizedFrames,
-              delayMs: directionCapture.delayMs,
-              source: 'viewer-walk-capture',
-              frames: {
-                count: resizedFrames.length,
-                format: 'base64-frame-sequence',
-              },
-            },
-          ]
-        }),
-      )
-
-      const nextDirections = Object.fromEntries(
-        resizedEntries.filter((entry) => Boolean(entry[1])),
-      )
-      const fallback360Direction =
-        activeSpriteDirections?.view_360 || buildDefaultSpriteDirections(defaultSpritesCacheKey).view_360
+      const nextDirections = await buildViewerAnimationDirections(capturedDirections, captureSize)
 
       setDevSettings((currentValue) => ({
         ...currentValue,
         defaultSpritesEnabled: false,
       }))
-      setSpriteResult({
-        animation: 'walk',
+      setSpritePreviewMode(animationKey)
+      setSpriteResult((currentValue) => ({
+        animation: animationKey,
         spriteSize: captureSize,
-        directions: {
-          ...(fallback360Direction ? { view_360: fallback360Direction } : {}),
-          ...nextDirections,
+        directions: nextDirections,
+        sharedDirections: currentValue?.sharedDirections || null,
+        animations: {
+          ...(currentValue?.animations || {}),
+          [animationKey]: {
+            animation: animationKey,
+            label: ANIMATION_LABEL_BY_KEY[animationKey] || animationKey,
+            preset: ANIMATION_PRESET_BY_KEY[animationKey] || '',
+            directions: nextDirections,
+          },
         },
-      })
+      }))
     } catch (requestError) {
-      setError(requestError?.message || 'Failed to capture animated walk sprites.')
+      setError(requestError?.message || 'Failed to capture animated sprites.')
     } finally {
       setIsCapturingWalkSprites(false)
     }
@@ -2036,13 +2497,14 @@ function App() {
 
     try {
       const result = await createTripoRetargetTask(sourceTaskId, {
-        animationName: String(devSettings.tripoRetargetAnimationName || '').trim(),
+        animations: FIXED_RETARGET_ANIMATIONS,
       })
-      setModelPreviewMode('animated')
+      setModelPreviewMode(DEFAULT_ANIMATED_PREVIEW_KEY)
       applyTripoTaskStart(result, {
         animationMode: 'animated',
         fallbackTaskType: 'animate_retarget',
         fallbackSourceTaskId: sourceTaskId,
+        requestedAnimations: FIXED_RETARGET_ANIMATIONS,
       })
       if (result?.taskId) {
         startPendingTaskTiming(result.taskId, 'animate', startedAt)
@@ -2082,42 +2544,75 @@ function App() {
     setIsGeneratingSprite(true)
     setIsCapturingWalkSprites(true)
     const captureSize = normalizeSpriteSize(devSettings.spriteSize)
+    const previousPreviewMode = modelPreviewMode
 
     try {
-      const captureApi = viewerCaptureApiRef.current
-      if (!captureApi?.captureAnimatedSpriteDirections) {
-        throw new Error('3D viewer is not ready for animated sprite capture yet.')
+      const aposeCaptureModelUrl =
+        (aposeModelVariant && modelOutputVariants?.[aposeModelVariant]) || ''
+      if (!aposeCaptureModelUrl) {
+        throw new Error('A-pose model is unavailable for 360 capture.')
       }
 
-      if (!activeModelUrl) {
-        throw new Error('Load an animated model before capturing walk sprites.')
+      setModelPreviewMode('apose')
+      await sleep(0)
+      const aposeCaptureApi = await waitForViewerModel(aposeCaptureModelUrl, 'apose')
+      if (!aposeCaptureApi?.captureEightViews) {
+        throw new Error('3D viewer is not ready for A-pose 360 capture yet.')
       }
 
-      const capturedDirections = await captureApi.captureAnimatedSpriteDirections()
-      const nextDirections = await buildViewerWalkDirections(capturedDirections, captureSize)
-      const fallback360Direction =
-        resolveSpriteDirection(activeSpriteDirections, 'view_360') ||
-        buildDefaultSpriteDirections(defaultSpritesCacheKey).view_360
-      const mergedDirections =
-        fallback360Direction && hasUsableSpriteDirection(fallback360Direction)
-          ? {
-              ...nextDirections,
-              view_360: fallback360Direction,
-            }
-          : nextDirections
+      const aposeCaptures = await aposeCaptureApi.captureEightViews()
+      const aposeDirections = await buildViewerSnapshotDirections(aposeCaptures, captureSize)
+      const shared360Direction = buildSynthesized360Direction(aposeDirections)
+      if (!shared360Direction) {
+        throw new Error('A-pose 360 preview could not be created from the captured model views.')
+      }
+
+      const nextAnimations = {}
+
+      for (const animationKey of ANIMATION_PREVIEW_KEYS) {
+        const animationModelUrl = getAnimationPreviewModelUrl(tripoJob, animationKey)
+        if (!animationModelUrl) {
+          throw new Error(
+            `${ANIMATION_LABEL_BY_KEY[animationKey] || animationKey} animation model is unavailable.`,
+          )
+        }
+
+        setModelPreviewMode(animationKey)
+        await sleep(0)
+        const captureApi = await waitForViewerModel(animationModelUrl, animationKey)
+        if (!captureApi?.captureAnimatedSpriteDirections) {
+          throw new Error('3D viewer is not ready for animated sprite capture yet.')
+        }
+
+        const capturedDirections = await captureApi.captureAnimatedSpriteDirections()
+        const directionBundle = await buildViewerAnimationDirections(capturedDirections, captureSize)
+        nextAnimations[animationKey] = {
+          animation: animationKey,
+          label: ANIMATION_LABEL_BY_KEY[animationKey] || animationKey,
+          preset: ANIMATION_PRESET_BY_KEY[animationKey] || '',
+          directions: directionBundle,
+        }
+      }
 
       setDevSettings((currentValue) => ({
         ...currentValue,
         defaultSpritesEnabled: false,
       }))
+      setModelPreviewMode(DEFAULT_ANIMATED_PREVIEW_KEY)
+      setSpritePreviewMode(DEFAULT_SPRITE_PREVIEW_KEY)
       setSpriteResult({
-        animation: 'walk',
+        animation: DEFAULT_ANIMATED_PREVIEW_KEY,
         spriteSize: captureSize,
-        directions: mergedDirections,
+        directions: nextAnimations[DEFAULT_ANIMATED_PREVIEW_KEY]?.directions || null,
+        sharedDirections: {
+          [SPRITE_360_PREVIEW_KEY]: shared360Direction,
+        },
+        animations: nextAnimations,
       })
       generationStatus = 'success'
     } catch (requestError) {
-      setError(sanitizeProviderNames(requestError?.message || 'Failed to capture animated walk sprites.'))
+      setError(sanitizeProviderNames(requestError?.message || 'Failed to capture animated sprites.'))
+      setModelPreviewMode(previousPreviewMode)
     } finally {
       setIsGeneratingSprite(false)
       setIsCapturingWalkSprites(false)
@@ -2155,6 +2650,11 @@ function App() {
       const multiviewFolder = zip.folder('02_Multiview')
       const modelFolder = zip.folder('03_3DModel')
       const spritesFolder = zip.folder('04_Sprites')
+      const sharedSpriteDirections = resolveSharedSpriteDirections(spriteResult)
+      const shared360Direction = resolveSpriteDirection(
+        sharedSpriteDirections,
+        SPRITE_360_PREVIEW_KEY,
+      )
 
       const portraitBase64 = dataUrlToBase64Payload(portraitResult.imageDataUrl)
       if (!portraitBase64) {
@@ -2176,17 +2676,39 @@ function App() {
         multiviewFolder?.file(`${directionKey}.${directionExtension}`, directionBase64, { base64: true })
       }
 
-      const modelResponse = await fetch(activeDownloadUrl)
+      const bundleModelUrl = tripoJob.outputs?.downloadUrl || activeDownloadUrl
+      const modelResponse = await fetch(bundleModelUrl)
       if (!modelResponse.ok) {
         throw new Error('Failed to fetch 3D model output for download.')
       }
       const modelBlob = await modelResponse.blob()
       modelFolder?.file(`${tripoJob.taskId || 'model'}.glb`, modelBlob)
 
-      for (const directionKey of SPRITE_REQUIRED_KEYS) {
-        const direction = resolveSpriteDirection(spriteResult?.directions, directionKey)
-        const directionBlob = await buildDirectionGifBlob(direction, Number(spriteResult?.spriteSize) || 64)
-        spritesFolder?.file(`${directionKey}.gif`, directionBlob)
+      if (!hasUsableSpriteDirection(shared360Direction)) {
+        throw new Error('360 sprite preview is incomplete for download.')
+      }
+
+      const shared360Blob = await buildDirectionGifBlob(
+        shared360Direction,
+        Number(spriteResult?.spriteSize) || 64,
+      )
+      spritesFolder?.file('360.gif', shared360Blob)
+
+      for (const animationKey of ANIMATION_PREVIEW_KEYS) {
+        const animationFolder = spritesFolder?.folder(animationKey)
+        const directions = resolveSpriteAnimationDirections(spriteResult, animationKey)
+        if (!hasRequiredSpriteDirections(directions)) {
+          throw new Error(`${ANIMATION_LABEL_BY_KEY[animationKey] || animationKey} sprite output is incomplete.`)
+        }
+
+        for (const directionKey of SPRITE_CAPTURE_REQUIRED_KEYS) {
+          const direction = resolveSpriteDirection(directions, directionKey)
+          const directionBlob = await buildDirectionGifBlob(
+            direction,
+            Number(spriteResult?.spriteSize) || 64,
+          )
+          animationFolder?.file(`${directionKey}.gif`, directionBlob)
+        }
       }
 
       const bundleBlob = await zip.generateAsync({
@@ -2264,15 +2786,17 @@ function App() {
     setIsCreatingRetargetTask(true)
 
     try {
+      const requestedAnimationName = String(devSettings.tripoRetargetAnimationName || '').trim()
       const result = await createTripoRetargetTask(retargetStartTaskId, {
-        animationName: String(devSettings.tripoRetargetAnimationName || '').trim(),
+        animationName: requestedAnimationName,
       })
-      setModelPreviewMode('animated')
+      setModelPreviewMode(resolveSingleAnimationPreviewKey(requestedAnimationName))
       applyTripoTaskStart(result, {
         animationMode: 'animated',
         fallbackTaskType: 'animate_retarget',
         fallbackSourceTaskId:
           tripoJob.taskType === 'animate_rig' ? tripoJob.taskId : tripoJob.sourceTaskId || '',
+        requestedAnimations: normalizeRequestedAnimations(requestedAnimationName),
       })
     } catch (requestError) {
       setError(requestError.message)
@@ -2330,6 +2854,12 @@ function App() {
         ...nextJob,
         taskId: nextJob.taskId || trimmedTaskId,
         animationMode: nextAnimationMode,
+        requestedAnimations:
+          nextJob?.outputs?.animations && typeof nextJob.outputs.animations === 'object'
+            ? ANIMATION_PREVIEW_KEYS.filter((animationKey) => nextJob.outputs.animations?.[animationKey]).map(
+                (animationKey) => ANIMATION_PRESET_BY_KEY[animationKey],
+              )
+            : normalizeRequestedAnimations(nextJob?.requestedAnimations),
       })
       setStep03TaskState((currentState) => mergeStep03TaskStateWithJob(currentState, nextJob))
     } catch (requestError) {
@@ -2410,7 +2940,7 @@ function App() {
       setIsCapturingWalkSprites(false)
       setIsBuildingModelViewGif(false)
       setModelPreviewMode('apose')
-      setSpritePreviewMode('walk_8')
+      setSpritePreviewMode(DEFAULT_SPRITE_PREVIEW_KEY)
       setDefaultSpritesCacheKey(Date.now())
       setExistingTripoTaskIdInput('')
       setAnimateRigTaskIdInput('')
@@ -2764,11 +3294,16 @@ function App() {
                     id="step03-animation-select"
                     className="panel-heading-select"
                     value={modelPreviewMode}
-                    onChange={(event) => setModelPreviewMode(event.target.value)}
+                    onChange={(event) =>
+                      setModelPreviewMode(normalizeAnimationPreviewKey(event.target.value))
+                    }
                     aria-label="3D model animation preview"
                   >
-                    <option value="apose">A-pose</option>
-                    <option value="animated">Walk</option>
+                    {STEP03_PREVIEW_OPTIONS.map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -2783,6 +3318,8 @@ function App() {
                   >
                     <ModelViewer
                       modelUrl={activeModelUrl}
+                      animationSelectionKey={activeViewerAnimationSelectionKey}
+                      animationClipIndex={activeViewerAnimationClipIndex}
                       resetSignal={viewerResetSignal}
                       onCaptureApiReady={handleViewerCaptureApiReady}
                     />
@@ -2862,8 +3399,11 @@ function App() {
                   onChange={(event) => setSpritePreviewMode(event.target.value)}
                   aria-label="Sprite animation preview"
                 >
-                  <option value="view_360">360</option>
-                  <option value="walk_8">8-direction walk</option>
+                  {SPRITE_PREVIEW_OPTIONS.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -2981,7 +3521,7 @@ function App() {
               <input
                 type="text"
                 value={devSettings.tripoRetargetAnimationName}
-                placeholder="Leave blank for server default, e.g. preset:idle"
+                placeholder="Leave blank for server default, e.g. preset:biped:wait"
                 onChange={(event) =>
                   setDevSettings((currentValue) => ({
                     ...currentValue,
@@ -3113,7 +3653,7 @@ function App() {
                 onClick={handleCaptureWalkSprites}
                 disabled={!activeModelUrl || isCapturingWalkSprites}
               >
-                {isCapturingWalkSprites ? 'Capturing Walk Sprites...' : 'Capture Walk Sprites'}
+                {isCapturingWalkSprites ? 'Capturing Selected Sprites...' : 'Capture Selected Sprites'}
               </button>
             </div>
             <div className="dev-panel__field">
@@ -3154,7 +3694,10 @@ function App() {
                 <p>Mesh quality: {TRIPO_QUALITY_LABELS[devSettings.tripoMeshQuality]}</p>
                 <p>Texture quality: {TRIPO_QUALITY_LABELS[devSettings.tripoTextureQuality]}</p>
                 <p>Face limit: {resolvedTripoFaceLimit || 'adaptive'}</p>
-                <p>Preview pose: {modelPreviewMode === 'apose' ? 'A-pose' : 'Animated'}</p>
+                <p>
+                  Preview pose:{' '}
+                  {STEP03_PREVIEW_OPTIONS.find((option) => option.key === modelPreviewMode)?.label || 'A-pose'}
+                </p>
                 <p>
                   Preview variant:{' '}
                   {resolvedModelVariant
@@ -3184,10 +3727,15 @@ function App() {
                 <span>Preview Pose</span>
                 <select
                   value={modelPreviewMode}
-                  onChange={(event) => setModelPreviewMode(event.target.value)}
+                  onChange={(event) =>
+                    setModelPreviewMode(normalizeAnimationPreviewKey(event.target.value))
+                  }
                 >
-                  <option value="animated">Animated</option>
-                  <option value="apose">A-pose</option>
+                  {STEP03_PREVIEW_OPTIONS.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="dev-panel__field">
@@ -3265,7 +3813,7 @@ function App() {
                   disabled={!canAnimateRetarget || isCreatingRetargetTask}
                   onClick={handleAnimateRetarget}
                 >
-                  {isCreatingRetargetTask ? 'Submitting Retarget...' : 'Animate Retarget'}
+                  {isCreatingRetargetTask ? 'Submitting Single Animate...' : 'Animate Single'}
                 </button>
               </div>
               <div className="action-row action-row--compact action-row--dev">

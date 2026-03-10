@@ -12,9 +12,64 @@ orthographic neutral A-pose, white seamless background`,
   `full-length one full body character, Side VIEW ONLY, head-to-toe in frame
 orthographic, neutral A-pose, light grey seamless background, sharp focus, No weapon, No cape`,
 ])
+const ANIMATED_TASK_TYPES = new Set(['animate_retarget', 'animate_model'])
 
 const canUseStorage = () => typeof window !== 'undefined' && Boolean(window.localStorage)
 const canUseIndexedDb = () => typeof window !== 'undefined' && Boolean(window.indexedDB)
+
+const normalizeRequestedAnimations = (value) => {
+  const sourceValues = Array.isArray(value) ? value : value ? [value] : []
+  const seenValues = new Set()
+  const normalizedValues = []
+
+  for (const entry of sourceValues) {
+    const animationPreset = String(entry || '').trim()
+    if (!animationPreset) {
+      continue
+    }
+
+    const dedupeKey = animationPreset.toLowerCase()
+    if (seenValues.has(dedupeKey)) {
+      continue
+    }
+
+    seenValues.add(dedupeKey)
+    normalizedValues.push(animationPreset)
+  }
+
+  return normalizedValues
+}
+
+const LEGACY_ANIMATION_KEY_BY_PRESET = Object.freeze({
+  idle: 'idle',
+  walk: 'walk',
+  run: 'run',
+  slash: 'slash',
+  'preset:idle': 'idle',
+  'preset:biped:wait': 'idle',
+  'preset:walk': 'walk',
+  'preset:run': 'run',
+  'preset:slash': 'slash',
+  'preset:biped:idle': 'idle',
+  'preset:biped:walk': 'walk',
+  'preset:biped:run': 'run',
+  'preset:biped:slash': 'slash',
+})
+
+const getAnimationKeyFromPreset = (value) =>
+  LEGACY_ANIMATION_KEY_BY_PRESET[String(value || '').trim().toLowerCase()] || ''
+
+const resolveLegacyAnimationOutputKey = (requestedAnimations = []) => {
+  const requestedAnimationKeys = normalizeRequestedAnimations(requestedAnimations)
+    .map((animationPreset) => getAnimationKeyFromPreset(animationPreset))
+    .filter(Boolean)
+
+  if (requestedAnimationKeys.includes('idle')) {
+    return 'idle'
+  }
+
+  return requestedAnimationKeys[0] || 'walk'
+}
 
 const normalizeMultiviewPromptValue = (value) => {
   const normalizedValue = String(value || '').trim()
@@ -39,14 +94,85 @@ const normalizeHistoryEntry = (entry) => ({
   modelUrl: entry?.modelUrl || '',
 })
 
+const normalizeTripoAnimationOutput = (entry, fallbackLabel = '') => {
+  if (!entry || typeof entry !== 'object') {
+    return null
+  }
+
+  const variant =
+    String(entry?.variant || '').trim() ||
+    (entry?.variants && typeof entry.variants === 'object'
+      ? Object.keys(entry.variants).find((key) => Boolean(entry.variants[key])) || ''
+      : '')
+
+  if (
+    !entry?.modelUrl &&
+    !entry?.downloadUrl &&
+    (!entry?.variants || typeof entry.variants !== 'object' || Object.keys(entry.variants).length === 0)
+  ) {
+    return null
+  }
+
+  return {
+    preset: String(entry?.preset || '').trim(),
+    label: String(entry?.label || fallbackLabel).trim(),
+    variant,
+    modelUrl: entry?.modelUrl || '',
+    downloadUrl: entry?.downloadUrl || '',
+    variants: entry?.variants && typeof entry.variants === 'object' ? entry.variants : null,
+    ...(Number.isInteger(entry?.clipIndex) ? { clipIndex: entry.clipIndex } : {}),
+  }
+}
+
+const normalizeTripoOutputs = (outputs, taskType = '', requestedAnimations = []) => {
+  if (!outputs) {
+    return null
+  }
+
+  const normalizedOutputs = {
+    ...outputs,
+    modelUrl: outputs?.modelUrl || '',
+    downloadUrl: outputs?.downloadUrl || '',
+    variant: outputs?.variant || '',
+    variants: outputs?.variants && typeof outputs.variants === 'object' ? outputs.variants : null,
+  }
+  const normalizedAnimations = {}
+
+  if (outputs?.animations && typeof outputs.animations === 'object') {
+    for (const [animationKey, entry] of Object.entries(outputs.animations)) {
+      const normalizedEntry = normalizeTripoAnimationOutput(entry)
+      if (normalizedEntry) {
+        normalizedAnimations[animationKey] = normalizedEntry
+      }
+    }
+  }
+
+  if (
+    Object.keys(normalizedAnimations).length === 0 &&
+    ANIMATED_TASK_TYPES.has(String(taskType || '').trim().toLowerCase())
+  ) {
+    const legacyAnimationEntry = normalizeTripoAnimationOutput(outputs, 'Walk')
+    if (legacyAnimationEntry) {
+      normalizedAnimations[resolveLegacyAnimationOutputKey(requestedAnimations)] = legacyAnimationEntry
+    }
+  }
+
+  if (Object.keys(normalizedAnimations).length > 0) {
+    normalizedOutputs.animations = normalizedAnimations
+  }
+
+  return normalizedOutputs
+}
+
 const normalizeTripoJob = (job) => ({
+  requestedAnimations: normalizeRequestedAnimations(job?.requestedAnimations),
   taskId: job?.taskId || '',
   taskType: job?.taskType || '',
   sourceTaskId: job?.sourceTaskId || '',
   status: job?.status || 'idle',
   progress: Number.isFinite(job?.progress) ? job.progress : 0,
   error: job?.error || '',
-  outputs: job?.outputs || null,
+  outputs: normalizeTripoOutputs(job?.outputs, job?.taskType, job?.requestedAnimations),
   animationMode: job?.animationMode === 'static' ? 'static' : job?.animationMode === 'animated' ? 'animated' : '',
 })
 
@@ -79,10 +205,81 @@ const normalizeSpriteResult = (spriteResult) => {
     return null
   }
 
+  const normalizedAnimations = {}
+
+  if (spriteResult?.animations && typeof spriteResult.animations === 'object') {
+    for (const [animationKey, entry] of Object.entries(spriteResult.animations)) {
+      const directions = entry?.directions || null
+      if (!directions || typeof directions !== 'object') {
+        continue
+      }
+
+      normalizedAnimations[animationKey] = {
+        animation: String(entry?.animation || animationKey).trim() || animationKey,
+        label: String(entry?.label || '').trim(),
+        preset: String(entry?.preset || '').trim(),
+      directions,
+      }
+    }
+  }
+
+  const resolveSharedDirections = () => {
+    if (spriteResult?.sharedDirections && typeof spriteResult.sharedDirections === 'object') {
+      const shared360 =
+        spriteResult.sharedDirections.view_360 ||
+        spriteResult.sharedDirections.view360 ||
+        spriteResult.sharedDirections['360']
+
+      return shared360
+        ? {
+            view_360: shared360,
+          }
+        : null
+    }
+
+    const idleDirections = normalizedAnimations?.idle?.directions || null
+    const legacyDirections =
+      spriteResult?.directions && typeof spriteResult.directions === 'object'
+        ? spriteResult.directions
+        : null
+    const shared360 =
+      idleDirections?.view_360 ||
+      idleDirections?.view360 ||
+      idleDirections?.['360'] ||
+      legacyDirections?.view_360 ||
+      legacyDirections?.view360 ||
+      legacyDirections?.['360']
+
+    return shared360
+      ? {
+          view_360: shared360,
+        }
+      : null
+  }
+
+  if (
+    Object.keys(normalizedAnimations).length === 0 &&
+    spriteResult?.directions &&
+    typeof spriteResult.directions === 'object'
+  ) {
+    const legacyAnimationKey = String(spriteResult.animation || 'walk').trim() || 'walk'
+    normalizedAnimations[legacyAnimationKey] = {
+      animation: legacyAnimationKey,
+      label: legacyAnimationKey,
+      preset: '',
+      directions: spriteResult.directions,
+    }
+  }
+
+  const firstAnimationKey = Object.keys(normalizedAnimations)[0] || 'walk'
+  const sharedDirections = resolveSharedDirections()
+
   return {
-    animation: spriteResult.animation || 'run',
+    animation: firstAnimationKey,
     spriteSize: Number(spriteResult.spriteSize) || 64,
-    directions: spriteResult.directions || null,
+    directions: normalizedAnimations[firstAnimationKey]?.directions || null,
+    animations: Object.keys(normalizedAnimations).length > 0 ? normalizedAnimations : null,
+    sharedDirections,
   }
 }
 

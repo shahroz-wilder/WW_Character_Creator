@@ -35,7 +35,7 @@ const TEST_CONFIG = {
   tripoRigModelVersion: 'v2.0-20250506',
   tripoIdleAnimationEnabled: false,
   tripoIdleAnimationTaskType: 'animate_model',
-  tripoIdleAnimationName: 'idle',
+  tripoIdleAnimationName: 'preset:biped:wait',
   tripoIdleAnimationInPlace: true,
   pixellabApiKey: 'pxl_test',
   pixellabBaseUrl: 'https://api.pixellab.ai/v1',
@@ -196,7 +196,7 @@ describe('tripoClient', () => {
       await expect(
         tripoClient.createAnimationTask({
           originalModelTaskId: 'rig-task-1',
-          animation: 'preset:idle',
+          animation: 'preset:biped:wait',
           taskType: 'animate_retarget',
           animateInPlace: false,
         }),
@@ -210,7 +210,7 @@ describe('tripoClient', () => {
           requestBody: {
             type: 'animate_retarget',
             original_model_task_id: 'rig-task-1',
-            animation: 'preset:idle',
+            animation: 'preset:biped:wait',
             animate_in_place: false,
           },
         }),
@@ -416,6 +416,78 @@ describe('multiview route', () => {
         mode: 'front-only',
       }),
     )
+  })
+})
+
+describe('tripo route', () => {
+  it('accepts multi-animation retarget payloads', async () => {
+    const tripoService = {
+      ...noopTripoService,
+      createRetargetTask: vi.fn().mockResolvedValue({
+        taskId: 'retarget-task',
+        taskType: 'animate_retarget',
+        status: 'queued',
+      }),
+    }
+    const app = createApp(TEST_CONFIG, {
+      portraitService: { generatePortrait: vi.fn() },
+      multiviewService: noopMultiviewService,
+      tripoService,
+      spriteService: noopSpriteService,
+    })
+
+    const response = await request(app)
+      .post('/api/tripo/tasks/rig-task-1/retarget')
+      .send({
+        animations: [
+          'preset:biped:wait',
+          'preset:walk',
+          'preset:run',
+          'preset:slash',
+        ],
+      })
+
+    expect(response.status).toBe(200)
+    expect(tripoService.createRetargetTask).toHaveBeenCalledWith('rig-task-1', {
+      animationName: undefined,
+      animations: [
+        'preset:biped:wait',
+        'preset:walk',
+        'preset:run',
+        'preset:slash',
+      ],
+    })
+  })
+
+  it('passes animationKey through the model proxy route', async () => {
+    const tripoService = {
+      ...noopTripoService,
+      getModelAsset: vi.fn().mockResolvedValue({
+        variant: 'animation_model',
+        response: new Response(Buffer.from('glb'), {
+          status: 200,
+          headers: {
+            'Content-Type': 'model/gltf-binary',
+            'Content-Length': '3',
+          },
+        }),
+      }),
+    }
+    const app = createApp(TEST_CONFIG, {
+      portraitService: { generatePortrait: vi.fn() },
+      multiviewService: noopMultiviewService,
+      tripoService,
+      spriteService: noopSpriteService,
+    })
+
+    const response = await request(app)
+      .get('/api/tripo/tasks/retarget-task/model?variant=animation_model&animationMode=animated&animationKey=walk')
+
+    expect(response.status).toBe(200)
+    expect(tripoService.getModelAsset).toHaveBeenCalledWith('retarget-task', 'animation_model', {
+      animationMode: 'animated',
+      animationKey: 'walk',
+    })
   })
 })
 
@@ -1119,7 +1191,7 @@ describe('tripoService', () => {
     expect(createRigTask).toHaveBeenCalledTimes(1)
     expect(createAnimationTask).toHaveBeenCalledWith({
       originalModelTaskId: 'rig-task-idle-1',
-      animation: 'idle',
+      animation: 'preset:biped:wait',
       taskType: 'animate_model',
       animateInPlace: null,
     })
@@ -1171,7 +1243,7 @@ describe('tripoService', () => {
       config: {
         ...TEST_CONFIG,
         tripoIdleAnimationTaskType: 'animate_retarget',
-        tripoIdleAnimationName: 'preset:idle',
+        tripoIdleAnimationName: 'preset:biped:wait',
         tripoIdleAnimationInPlace: false,
       },
     })
@@ -1319,7 +1391,7 @@ describe('tripoService', () => {
       config: {
         ...TEST_CONFIG,
         tripoIdleAnimationTaskType: 'animate_retarget',
-        tripoIdleAnimationName: 'preset:idle',
+        tripoIdleAnimationName: 'preset:biped:wait',
       },
       taskAuditLogger,
     })
@@ -1341,6 +1413,157 @@ describe('tripoService', () => {
         sourceTaskId: 'rig-task-fallback-1',
       }),
     )
+  })
+
+  it('creates separate retarget tasks for fixed animation batches and aggregates them as one summary', async () => {
+    const animationTaskIdByPreset = {
+      'preset:biped:wait': 'anim-idle-1',
+      'preset:walk': 'anim-walk-1',
+      'preset:run': 'anim-run-1',
+      'preset:slash': 'anim-slash-1',
+    }
+    const createAnimationTask = vi.fn(async ({ animation }) => animationTaskIdByPreset[animation])
+    const fetchRemoteAsset = vi.fn().mockResolvedValue(
+      new Response(Buffer.from('glb'), {
+        status: 200,
+        headers: {
+          'Content-Type': 'model/gltf-binary',
+        },
+      }),
+    )
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer: vi.fn(),
+        createMultiviewTask: vi.fn(),
+        createImageTask: vi.fn(),
+        createRigTask: vi.fn(),
+        createAnimationTask,
+        getTask: vi.fn(async (taskId) => {
+          if (taskId === 'rig-task-group-1') {
+            return {
+              task_id: 'rig-task-group-1',
+              type: 'animate_rig',
+              status: 'success',
+              progress: 100,
+              original_model_task_id: 'task-base-group-1',
+              output: {
+                rigged_model: 'https://example.com/rigged-group.glb',
+              },
+            }
+          }
+
+          if (taskId === 'task-base-group-1') {
+            return {
+              task_id: 'task-base-group-1',
+              type: 'image_to_model',
+              status: 'success',
+              progress: 100,
+              output: {
+                model: 'https://example.com/base-group.glb',
+              },
+            }
+          }
+
+          const animationDefinitionByTaskId = {
+            'anim-idle-1': { preset: 'preset:biped:wait', url: 'https://example.com/idle.glb' },
+            'anim-walk-1': { preset: 'preset:walk', url: 'https://example.com/walk.glb' },
+            'anim-run-1': { preset: 'preset:run', url: 'https://example.com/run.glb' },
+            'anim-slash-1': { preset: 'preset:slash', url: 'https://example.com/slash.glb' },
+          }
+          const animationDefinition = animationDefinitionByTaskId[taskId]
+          if (animationDefinition) {
+            return {
+              task_id: taskId,
+              type: 'animate_retarget',
+              status: 'success',
+              progress: 100,
+              original_model_task_id: 'rig-task-group-1',
+              input: {
+                animation: animationDefinition.preset,
+              },
+              output: {
+                animation_model: animationDefinition.url,
+              },
+            }
+          }
+
+          return null
+        }),
+        fetchRemoteAsset,
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoIdleAnimationTaskType: 'animate_retarget',
+      },
+    })
+
+    const result = await tripoService.createRetargetTask('rig-task-group-1', {
+      animations: ['preset:biped:wait', 'preset:walk', 'preset:run', 'preset:slash'],
+    })
+
+    expect(createAnimationTask).toHaveBeenCalledTimes(4)
+    expect(createAnimationTask).toHaveBeenNthCalledWith(1, {
+      originalModelTaskId: 'rig-task-group-1',
+      animation: 'preset:biped:wait',
+      taskType: 'animate_retarget',
+      animateInPlace: true,
+    })
+    expect(createAnimationTask).toHaveBeenNthCalledWith(2, {
+      originalModelTaskId: 'rig-task-group-1',
+      animation: 'preset:walk',
+      taskType: 'animate_retarget',
+      animateInPlace: true,
+    })
+    expect(createAnimationTask).toHaveBeenNthCalledWith(3, {
+      originalModelTaskId: 'rig-task-group-1',
+      animation: 'preset:run',
+      taskType: 'animate_retarget',
+      animateInPlace: true,
+    })
+    expect(createAnimationTask).toHaveBeenNthCalledWith(4, {
+      originalModelTaskId: 'rig-task-group-1',
+      animation: 'preset:slash',
+      taskType: 'animate_retarget',
+      animateInPlace: true,
+    })
+    expect(result).toEqual(
+      expect.objectContaining({
+        taskId: expect.stringMatching(/^animate-group_/),
+        taskType: 'animate_retarget',
+        sourceTaskId: 'rig-task-group-1',
+        requestedAnimations: ['preset:biped:wait', 'preset:walk', 'preset:run', 'preset:slash'],
+      }),
+    )
+
+    const summary = await tripoService.getTaskSummary(result.taskId, {
+      animationMode: 'animated',
+    })
+
+    expect(summary.taskId).toBe(result.taskId)
+    expect(summary.requestedAnimations).toEqual([
+      'preset:biped:wait',
+      'preset:walk',
+      'preset:run',
+      'preset:slash',
+    ])
+    expect(summary.status).toBe('success')
+    expect(summary.outputs?.modelUrl).toBe(
+      '/api/tripo/tasks/anim-idle-1/model?variant=animation_model&animationMode=animated',
+    )
+    expect(summary.outputs?.animations?.walk?.modelUrl).toBe(
+      '/api/tripo/tasks/anim-walk-1/model?variant=animation_model&animationMode=animated',
+    )
+    expect(summary.outputs?.animations?.slash?.downloadUrl).toBe(
+      '/api/tripo/tasks/anim-slash-1/model?variant=animation_model&animationMode=animated',
+    )
+
+    const asset = await tripoService.getModelAsset(result.taskId, 'animation_model', {
+      animationMode: 'animated',
+      animationKey: 'run',
+    })
+
+    expect(fetchRemoteAsset).toHaveBeenCalledWith('https://example.com/run.glb')
+    expect(asset.variant).toBe('animation_model')
   })
 
   it('skips rig and animation tasks when static mode is requested', async () => {
@@ -1548,7 +1771,7 @@ describe('tripoService', () => {
     expect(createRigTask).toHaveBeenCalledTimes(1)
     expect(createAnimationTask).toHaveBeenCalledWith({
       originalModelTaskId: 'rig-task-animated-1',
-      animation: 'idle',
+      animation: 'preset:biped:wait',
       taskType: 'animate_model',
       animateInPlace: null,
     })
@@ -1566,6 +1789,189 @@ describe('tripoService', () => {
         rigged_model: '/api/tripo/tasks/anim-task-animated-1/model?variant=rigged_model',
       }),
     )
+  })
+
+  it('normalizes multi-animation task outputs and proxies animationKey assets', async () => {
+    const fetchRemoteAsset = vi.fn().mockResolvedValue(
+      new Response(Buffer.from('glb'), {
+        status: 200,
+        headers: {
+          'Content-Type': 'model/gltf-binary',
+        },
+      }),
+    )
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer: vi.fn(),
+        createMultiviewTask: vi.fn(),
+        createImageTask: vi.fn(),
+        createRigTask: vi.fn(),
+        createAnimationTask: vi.fn(),
+        getTask: vi.fn(async (taskId) => {
+          if (taskId === 'retarget-task-multi-1') {
+            return {
+              task_id: 'retarget-task-multi-1',
+              type: 'animate_retarget',
+              status: 'success',
+              progress: 100,
+              original_model_task_id: 'rig-task-multi-1',
+              input: {
+                animations: [
+                  'preset:biped:wait',
+                  'preset:walk',
+                  'preset:run',
+                  'preset:slash',
+                ],
+              },
+              output: {
+                animations: [
+                  { preset: 'preset:biped:idle', animation_model: 'https://example.com/idle.glb' },
+                  { preset: 'preset:biped:walk', animation_model: 'https://example.com/walk.glb' },
+                  { preset: 'preset:biped:run', animation_model: 'https://example.com/run.glb' },
+                  { preset: 'preset:biped:slash', animation_model: 'https://example.com/slash.glb' },
+                ],
+              },
+            }
+          }
+
+          if (taskId === 'rig-task-multi-1') {
+            return {
+              task_id: 'rig-task-multi-1',
+              type: 'animate_rig',
+              status: 'success',
+              progress: 100,
+              original_model_task_id: 'task-base-multi-1',
+              output: {
+                rigged_model: 'https://example.com/rigged.glb',
+              },
+            }
+          }
+
+          return {
+            task_id: 'task-base-multi-1',
+            type: 'image_to_model',
+            status: 'success',
+            progress: 100,
+            output: {
+              model: 'https://example.com/base.glb',
+            },
+          }
+        }),
+        fetchRemoteAsset,
+      },
+      config: TEST_CONFIG,
+    })
+
+    const summary = await tripoService.getTaskSummary('retarget-task-multi-1', {
+      animationMode: 'animated',
+    })
+
+    expect(summary.outputs?.animations?.idle?.modelUrl).toBe(
+      '/api/tripo/tasks/retarget-task-multi-1/model?variant=animation_model&animationMode=animated&animationKey=idle',
+    )
+    expect(summary.outputs?.animations?.walk?.modelUrl).toBe(
+      '/api/tripo/tasks/retarget-task-multi-1/model?variant=animation_model&animationMode=animated&animationKey=walk',
+    )
+    expect(summary.outputs?.variant).toBe('animation_model')
+    expect(summary.outputs?.variants?.rigged_model).toBe(
+      '/api/tripo/tasks/retarget-task-multi-1/model?variant=rigged_model&animationMode=animated',
+    )
+
+    const asset = await tripoService.getModelAsset('retarget-task-multi-1', 'animation_model', {
+      animationMode: 'animated',
+      animationKey: 'walk',
+    })
+
+    expect(fetchRemoteAsset).toHaveBeenCalledWith('https://example.com/walk.glb')
+    expect(asset.variant).toBe('animation_model')
+  })
+
+  it('normalizes bundled multi-animation retarget outputs into shared clip-indexed entries', async () => {
+    const fetchRemoteAsset = vi.fn().mockResolvedValue(
+      new Response(Buffer.from('glb'), {
+        status: 200,
+        headers: {
+          'Content-Type': 'model/gltf-binary',
+        },
+      }),
+    )
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer: vi.fn(),
+        createMultiviewTask: vi.fn(),
+        createImageTask: vi.fn(),
+        createRigTask: vi.fn(),
+        createAnimationTask: vi.fn(),
+        getTask: vi.fn(async (taskId) => {
+          if (taskId === 'retarget-task-bundled-1') {
+            return {
+              task_id: 'retarget-task-bundled-1',
+              type: 'animate_retarget',
+              status: 'success',
+              progress: 100,
+              original_model_task_id: 'rig-task-bundled-1',
+              input: {
+                animations: [
+                  'preset:biped:wait',
+                  'preset:walk',
+                  'preset:run',
+                  'preset:slash',
+                ],
+              },
+              output: {
+                model: 'https://example.com/retarget-bundled.glb',
+              },
+            }
+          }
+
+          if (taskId === 'rig-task-bundled-1') {
+            return {
+              task_id: 'rig-task-bundled-1',
+              type: 'animate_rig',
+              status: 'success',
+              progress: 100,
+              original_model_task_id: 'task-base-bundled-1',
+              output: {
+                rigged_model: 'https://example.com/rigged.glb',
+              },
+            }
+          }
+
+          return {
+            task_id: 'task-base-bundled-1',
+            type: 'image_to_model',
+            status: 'success',
+            progress: 100,
+            output: {
+              model: 'https://example.com/base.glb',
+            },
+          }
+        }),
+        fetchRemoteAsset,
+      },
+      config: TEST_CONFIG,
+    })
+
+    const summary = await tripoService.getTaskSummary('retarget-task-bundled-1', {
+      animationMode: 'animated',
+    })
+
+    expect(summary.outputs?.variant).toBe('model')
+    expect(summary.outputs?.animations?.idle?.modelUrl).toBe(
+      '/api/tripo/tasks/retarget-task-bundled-1/model?variant=model&animationMode=animated&animationKey=idle',
+    )
+    expect(summary.outputs?.animations?.run?.clipIndex).toBe(2)
+    expect(summary.outputs?.variants?.rigged_model).toBe(
+      '/api/tripo/tasks/retarget-task-bundled-1/model?variant=rigged_model&animationMode=animated',
+    )
+
+    const asset = await tripoService.getModelAsset('retarget-task-bundled-1', 'model', {
+      animationMode: 'animated',
+      animationKey: 'slash',
+    })
+
+    expect(fetchRemoteAsset).toHaveBeenCalledWith('https://example.com/retarget-bundled.glb')
+    expect(asset.variant).toBe('model')
   })
 })
 

@@ -49,7 +49,7 @@ export const loadEnv = (source = process.env) => {
     tripoRigModelVersion: source.TRIPO_RIG_MODEL_VERSION || 'v1.0-20240301',
     tripoIdleAnimationEnabled: parseBoolean(source.TRIPO_IDLE_ANIMATION_ENABLED, true),
     tripoIdleAnimationTaskType: source.TRIPO_IDLE_ANIMATION_TASK_TYPE || 'animate_model',
-    tripoIdleAnimationName: source.TRIPO_IDLE_ANIMATION_NAME || 'idle',
+    tripoIdleAnimationName: source.TRIPO_IDLE_ANIMATION_NAME || 'preset:biped:wait',
     tripoIdleAnimationInPlace: parseBoolean(source.TRIPO_IDLE_ANIMATION_IN_PLACE, true),
   }
 

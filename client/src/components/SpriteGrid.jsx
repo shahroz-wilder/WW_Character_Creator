@@ -33,8 +33,7 @@ const resolveDirectionByAliases = (directions, aliases = []) => {
     return null
   }
 
-  const keys = Array.isArray(aliases) ? aliases : []
-  for (const alias of keys) {
+  for (const alias of aliases) {
     if (directions?.[alias]) {
       return directions[alias]
     }
@@ -84,23 +83,29 @@ const AnimatedSpriteTile = ({ direction, label, emptyCopy }) => {
   )
 }
 
-export function SpriteGrid({ directions, displayMode = 'walk_8', embedded = false }) {
-  const normalizedDisplayMode = displayMode === 'view_360' ? 'view_360' : 'walk_8'
-  const visibleSlots =
-    normalizedDisplayMode === 'view_360' ? [SPRITE_360_SLOT] : SPRITE_VIEW_SLOTS
-
+export function SpriteGrid({ directions, displayMode = 'view_360', embedded = false }) {
   const renderGrid = () => (
-    <div className={`sprite-grid${normalizedDisplayMode === 'view_360' ? ' sprite-grid--single' : ''}`}>
-      {visibleSlots.map(({ key, label, aliases }) => (
-        <article className="view-card" key={key}>
-          <span className="view-card__label">{label}</span>
+    <div className="sprite-grid">
+      {displayMode === 'view_360' ? (
+        <article className="view-card" key={SPRITE_360_SLOT.key}>
+          <span className="view-card__label">{SPRITE_360_SLOT.label}</span>
           <AnimatedSpriteTile
-            direction={resolveDirectionByAliases(directions, aliases)}
-            label={label}
-            emptyCopy={normalizedDisplayMode === 'view_360' ? '360 preview will appear here.' : ''}
+            direction={resolveDirectionByAliases(directions, SPRITE_360_SLOT.aliases)}
+            label={SPRITE_360_SLOT.label}
+            emptyCopy="360 preview will appear here."
           />
         </article>
-      ))}
+      ) : (
+        SPRITE_VIEW_SLOTS.map(({ key, label, aliases }) => (
+          <article className="view-card" key={key}>
+            <span className="view-card__label">{label}</span>
+            <AnimatedSpriteTile
+              direction={resolveDirectionByAliases(directions, aliases)}
+              label={label}
+            />
+          </article>
+        ))
+      )}
     </div>
   )
 
