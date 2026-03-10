@@ -23,7 +23,7 @@ import { MultiviewPromptEditor } from './components/MultiviewPromptEditor'
 import { PortraitReviewCard } from './components/PortraitReviewCard'
 import { SpriteGrid } from './components/SpriteGrid'
 import { downloadBlob, downloadDataUrl, downloadFromUrl } from './lib/download'
-import { isEmbeddedMode, sendSpriteResult, sendClose } from './lib/gameIpc'
+import { isEmbeddedMode, sendSpriteResult, sendClose, getEmbeddedSpriteSize } from './lib/gameIpc'
 import { createHistoryEntry, createRunId, updateHistoryEntry } from './lib/historyStore'
 import {
   clearPersistedSession,
@@ -1151,12 +1151,12 @@ function App() {
     portraitAspectRatio: initialSession?.devSettings?.portraitAspectRatio || DEV_PRESETS.portraitAspectRatio,
     portraitPromptPreset:
       initialSession?.devSettings?.portraitPromptPreset || DEV_PRESETS.portraitPreset,
-    spriteSize: Number(initialSession?.devSettings?.spriteSize) || DEV_PRESETS.spriteSize,
+    spriteSize: getEmbeddedSpriteSize() || Number(initialSession?.devSettings?.spriteSize) || DEV_PRESETS.spriteSize,
     tripoAnimationMode:
       initialSession?.devSettings?.tripoAnimationMode || DEV_PRESETS.tripoAnimationMode,
     tripoPbr: normalizeTripoPbr(initialSession?.devSettings?.tripoPbr, DEV_PRESETS.tripoPbr),
     tripoRetargetAnimations:
-      initialSession?.devSettings?.tripoRetargetAnimations || DEV_PRESETS.tripoRetargetAnimations,
+      isEmbeddedMode() ? 'preset:biped:wait preset:biped:walk' : (initialSession?.devSettings?.tripoRetargetAnimations || DEV_PRESETS.tripoRetargetAnimations),
     tripoRetargetAnimationName:
       initialSession?.devSettings?.tripoRetargetAnimationName || DEV_PRESETS.tripoRetargetAnimationName,
     tripoMeshQuality: normalizeTripoQuality(
@@ -3174,31 +3174,33 @@ function App() {
     setIsSendingToGame(true)
 
     try {
-      // Prefer the default animation's directions (walk/run), fall back to
-      // the top-level directions on spriteResult.
-      const animationKey = spriteResult?.animation || DEFAULT_ANIMATED_PREVIEW_KEY
-      const directions =
-        resolveSpriteAnimationDirections(spriteResult, animationKey) ||
-        spriteResult?.directions ||
-        null
-
-      if (!directions || !hasRequiredSpriteDirections(directions)) {
-        throw new Error('Sprite directions are incomplete.')
+      const buildCleanDirections = (animKey) => {
+        const dirs =
+          resolveSpriteAnimationDirections(spriteResult, animKey) ||
+          (animKey === spriteResult?.animation ? spriteResult?.directions : null)
+        if (!dirs) return null
+        const clean = {}
+        for (const { key } of MODEL_VIEW_CAPTURE_ORDER) {
+          const dir = resolveSpriteDirection(dirs, key)
+          if (dir?.frameDataUrls?.length) {
+            clean[key] = { frameDataUrls: dir.frameDataUrls }
+          }
+        }
+        return Object.keys(clean).length > 0 ? clean : null
       }
 
-      // Build a clean payload with only the frame data URLs per direction
-      const cleanDirections = {}
-      for (const { key } of MODEL_VIEW_CAPTURE_ORDER) {
-        const dir = resolveSpriteDirection(directions, key)
-        if (dir?.frameDataUrls?.length) {
-          cleanDirections[key] = { frameDataUrls: dir.frameDataUrls }
-        }
+      const walkDirections = buildCleanDirections('walk')
+      const idleDirections = buildCleanDirections('idle')
+
+      if (!walkDirections || !hasRequiredSpriteDirections(walkDirections)) {
+        throw new Error('Walk sprite directions are incomplete.')
       }
 
       await sendSpriteResult({
-        directions: cleanDirections,
+        directions: walkDirections,
+        idleDirections: idleDirections || null,
         spriteSize: Number(spriteResult?.spriteSize) || 128,
-        animation: animationKey,
+        animation: 'walk',
       })
     } catch (requestError) {
       setError(requestError?.message || 'Failed to send sprite to game.')
@@ -3654,6 +3656,16 @@ function App() {
     <div className="page-shell">
       <div className="page-backdrop" aria-hidden="true" />
       <main className="workspace-shell">
+        {embedded && (
+          <button
+            type="button"
+            className="secondary-button"
+            style={{ position: 'fixed', right: '16px', top: '8px', zIndex: 9999 }}
+            onClick={sendClose}
+          >
+            Back to Game
+          </button>
+        )}
         <header className="status-bar status-progress" aria-label="Pipeline progress">
           <div
             className="status-progress__track"
@@ -3817,56 +3829,60 @@ function App() {
             <div className="action-row action-row--compact">
               <button
                 type="button"
-                className="secondary-button"
+                className={embedded ? 'primary-button' : 'secondary-button'}
                 disabled={!canRunStep03AutoPipeline}
                 onClick={handleGenerateStep03Auto}
               >
                 {isRunningAuto3dPipeline ? 'Running 3D Auto...' : 'Generate 3D Auto'}
               </button>
-              <button
-                type="button"
-                className="primary-button"
-                disabled={!canRunStep03Generation || isRunningAuto3dPipeline}
-                onClick={handleGenerateStep03}
-              >
-                {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={!canRunStep03AutoRig || isRunningAuto3dPipeline}
-                onClick={handleStep03AutoRig}
-              >
-                {isCreatingRigTask ? 'Rigging...' : 'AutoRig'}
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={!canRunStep03Animate || isRunningAuto3dPipeline}
-                onClick={handleStep03Animate}
-              >
-                {isCreatingRetargetTask ? 'Animating...' : 'Animate'}
-              </button>
-                <button
-                  type="button"
-                  className="accept-button accept-button--icon-only"
-                  disabled={!canApproveStep03}
-                  onClick={handleAcceptStep03}
-                  aria-label="Accept 3D"
-                >
-                  <span className="accept-button__icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path
-                        d="M6.5 12.5 10.5 16.5 18 8.8"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </span>
-                </button>
+              {!embedded && (
+                <>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={!canRunStep03Generation || isRunningAuto3dPipeline}
+                    onClick={handleGenerateStep03}
+                  >
+                    {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={!canRunStep03AutoRig || isRunningAuto3dPipeline}
+                    onClick={handleStep03AutoRig}
+                  >
+                    {isCreatingRigTask ? 'Rigging...' : 'AutoRig'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={!canRunStep03Animate || isRunningAuto3dPipeline}
+                    onClick={handleStep03Animate}
+                  >
+                    {isCreatingRetargetTask ? 'Animating...' : 'Animate'}
+                  </button>
+                  <button
+                    type="button"
+                    className="accept-button accept-button--icon-only"
+                    disabled={!canApproveStep03}
+                    onClick={handleAcceptStep03}
+                    aria-label="Accept 3D"
+                  >
+                    <span className="accept-button__icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path
+                          d="M6.5 12.5 10.5 16.5 18 8.8"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </span>
+                  </button>
+                </>
+              )}
               </div>
             </section>
           </section>
@@ -3947,13 +3963,15 @@ function App() {
           </section>
         </section>
       </main>
-      <button
-        type="button"
-        className="dev-toggle"
-        onClick={() => setIsDevPanelOpen((currentValue) => !currentValue)}
-      >
-        DEV
-      </button>
+      {!embedded && (
+        <button
+          type="button"
+          className="dev-toggle"
+          onClick={() => setIsDevPanelOpen((currentValue) => !currentValue)}
+        >
+          DEV
+        </button>
+      )}
       {isDevPanelOpen ? (
         <aside className="dev-panel" aria-label="Development presets">
           <div className="dev-panel__header">

@@ -53,7 +53,7 @@ const DIAGONAL_FALLBACK = {
  * @param {number} spriteSize - Source frame pixel size (64 | 84 | 128)
  * @returns {{ buffer: Buffer, hash: string }}
  */
-export async function assembleSheet(directions, spriteSize = 128) {
+export async function assembleSheet(directions, spriteSize = 128, idleDirections = null) {
   if (!directions || typeof directions !== 'object') {
     throw new AppError('Missing directions for sheet assembly', 400)
   }
@@ -70,8 +70,13 @@ export async function assembleSheet(directions, spriteSize = 128) {
 
     const frames = dirData.frameDataUrls
 
-    // Column 0: idle frame (first animation frame)
-    const idleBuffer = await resizeFrame(frames[0], spriteSize)
+    // Column 0: idle frame — use dedicated idle animation if available, otherwise first walk frame
+    let idleDirData = idleDirections?.[direction]
+    if (!idleDirData?.frameDataUrls?.length && DIAGONAL_FALLBACK[direction]) {
+      idleDirData = idleDirections?.[DIAGONAL_FALLBACK[direction]]
+    }
+    const idleFrameUrl = idleDirData?.frameDataUrls?.[0] || frames[0]
+    const idleBuffer = await resizeFrame(idleFrameUrl, spriteSize)
     composites.push({
       input: idleBuffer,
       top: row * FRAME_SIZE,
@@ -114,6 +119,10 @@ export async function assembleSheet(directions, spriteSize = 128) {
 
 async function resizeFrame(dataUrl, sourceSize) {
   const { buffer } = parseImageDataUrl(dataUrl)
+
+  if (sourceSize === FRAME_SIZE) {
+    return sharp(buffer).png().toBuffer()
+  }
 
   return sharp(buffer)
     .resize(FRAME_SIZE, FRAME_SIZE, {
