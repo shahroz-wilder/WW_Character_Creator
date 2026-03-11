@@ -1431,17 +1431,17 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'DEV' }))
 
-    expect(screen.getByRole('combobox', { name: /Tone Mapping/i })).toHaveValue('aces')
+    expect(screen.getByRole('combobox', { name: /Tone Mapping/i })).toHaveValue('none')
     expect(screen.getByRole('slider', { name: /Exposure/i })).toHaveValue('0.68')
-    expect(screen.getByRole('slider', { name: /Environment/i })).toHaveValue('0.75')
-    expect(screen.getByRole('slider', { name: /Key Light/i })).toHaveValue('1.22')
+    expect(screen.getByRole('slider', { name: /Environment/i })).toHaveValue('0.54')
+    expect(screen.getByRole('slider', { name: /Key Light/i })).toHaveValue('0.84')
     expect(screen.getByRole('slider', { name: /Fill Light/i })).toHaveValue('1.22')
-    expect(screen.getByRole('slider', { name: /Rim Light/i })).toHaveValue('1.2')
+    expect(screen.getByRole('slider', { name: /Rim Light/i })).toHaveValue('0.96')
     expect(screen.getByRole('slider', { name: /Ambient/i })).toHaveValue('0.82')
     expect(screen.getByRole('slider', { name: /Material Roughness/i })).toHaveValue('0.48')
-    expect(screen.getByRole('slider', { name: /Contrast/i })).toHaveValue('1')
+    expect(screen.getByRole('slider', { name: /Contrast/i })).toHaveValue('1.07')
     expect(screen.getByRole('slider', { name: /Vibrance/i })).toHaveValue('0')
-    expect(screen.getByRole('slider', { name: /Sharpen/i })).toHaveValue('0.04')
+    expect(screen.getByRole('slider', { name: /Sharpen/i })).toHaveValue('0.2')
   })
 
   it('defaults DEV model quality settings to Ultra / Ultra / 64000', async () => {

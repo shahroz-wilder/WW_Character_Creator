@@ -5,17 +5,17 @@ export const VIEWER_TONE_MAPPING_LABELS = Object.freeze({
 })
 
 export const DEFAULT_VIEWER_LOOK_SETTINGS = Object.freeze({
-  environmentIntensity: 0.75,
-  keyLightIntensity: 1.22,
+  environmentIntensity: 0.54,
+  keyLightIntensity: 0.84,
   fillLightIntensity: 1.22,
-  rimLightIntensity: 1.2,
+  rimLightIntensity: 0.96,
   ambientLightIntensity: 0.82,
   roughnessMultiplier: 0.48,
-  toneMapping: 'aces',
+  toneMapping: 'none',
   exposure: 0.68,
-  contrast: 1,
+  contrast: 1.07,
   vibrance: 0,
-  sharpen: 0.04,
+  sharpen: 0.2,
 })
 
 const clampNumber = (value, minimum, maximum, fallback) => {
