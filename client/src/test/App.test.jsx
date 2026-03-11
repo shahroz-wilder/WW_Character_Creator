@@ -18,8 +18,12 @@ import {
 } from '../api/characterApi'
 import { resolveAnimatedSpriteCaptureDelayMs, resolveAnimatedSpriteDelayMs } from '../lib/spriteTiming'
 
-const DEFAULT_RETARGET_ANIMATIONS = ['preset:biped:walk', 'preset:biped:run']
-const DEFAULT_ANIMATION_KEYS = ['walk', 'run']
+const DEFAULT_RETARGET_ANIMATIONS = [
+  'preset:biped:walk',
+  'preset:biped:run',
+  'preset:biped:look_around',
+]
+const DEFAULT_ANIMATION_KEYS = ['walk', 'run', 'look_around']
 const getPresetForAnimationKey = (animationKey) =>
   animationKey === 'idle' ? 'preset:biped:wait' : `preset:biped:${animationKey}`
 const VALID_CAPTURE_FRAME =
@@ -108,7 +112,7 @@ const makeSharedSpriteDirections = () => ({
   view_360: makeSpriteDirection('view_360'),
 })
 
-const makeCapturedSpriteDirections = (seed) =>
+const makeCapturedSpriteDirections = () =>
   Object.fromEntries(
     ['front', 'front_right', 'right', 'back_right', 'back', 'back_left', 'left', 'front_left'].map(
       (directionKey) => [
@@ -267,28 +271,30 @@ const getStep01Panel = () => screen.getByLabelText('Step 01 Portrait Panel')
 const getStep02Panel = () => screen.getByLabelText('Step 02 Multiview Panel')
 const getStep03Panel = () => screen.getByLabelText('Step 03 3D Model Panel')
 const getStep04Panel = () => screen.getByLabelText('Step 04 Sprite Panel')
+const getDevPanel = () => screen.getByLabelText('Development presets')
 const getProgressFill = () => screen.getByTestId('status-progress-fill')
+const getDevActionButton = (name) => within(getDevPanel()).getByRole('button', { name })
 
-const generatePortraitAndAccept = async (user) => {
+const openDevPanel = async (user) => {
+  if (screen.queryByLabelText('Development presets')) {
+    return
+  }
+
+  await user.click(screen.getByRole('button', { name: 'DEV' }))
+  await waitFor(() => expect(screen.getByLabelText('Development presets')).toBeInTheDocument())
+}
+
+const generatePfp = async (user) => {
   await user.type(screen.getByLabelText('Character prompt'), 'pilot')
-  await user.click(screen.getByRole('button', { name: 'Generate PFP' }))
+  await user.click(within(getStep01Panel()).getByRole('button', { name: 'Generate 2D' }))
   await waitFor(() => expect(generatePortrait).toHaveBeenCalledTimes(1))
-  const acceptPortraitButton = screen.getByRole('button', { name: 'Accept Portrait' })
-  expect(acceptPortraitButton).toBeEnabled()
-  await user.click(acceptPortraitButton)
+  await waitFor(() => expect(generateMultiview).toHaveBeenCalledTimes(1))
 }
 
 const unlockStep03 = async (user) => {
-  await generatePortraitAndAccept(user)
-
-  const step02Panel = getStep02Panel()
-  const generate2DButton = within(step02Panel).getByRole('button', { name: 'Generate 2D' })
-  await user.click(generate2DButton)
-  await waitFor(() => expect(generateMultiview).toHaveBeenCalledTimes(1))
-
-  const accept2DButton = within(step02Panel).getByRole('button', { name: 'Accept Multiview' })
-  expect(accept2DButton).toBeEnabled()
-  await user.click(accept2DButton)
+  await generatePfp(user)
+  await waitFor(() => expect(getProgressFill()).toHaveAttribute('data-step-index', '3'))
+  await openDevPanel(user)
 }
 
 describe('App', () => {
@@ -384,27 +390,35 @@ describe('App', () => {
     global.Image = originalImage
   })
 
-  it('renders unified top progress bar and initial step gating', () => {
+  it('renders unified top progress bar and initial step gating', async () => {
     render(<App />)
+    const user = userEvent.setup()
+    await openDevPanel(user)
 
     expect(screen.getByRole('progressbar', { name: 'Pipeline step progress' })).toBeInTheDocument()
     expect(screen.queryByText(/^Session:/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/^Message:\s*SUCCESS/i)).not.toBeInTheDocument()
     expect(getProgressFill()).toHaveAttribute('data-step-index', '1')
 
-    expect(within(getStep01Panel()).getByRole('button', { name: 'Generate PFP' })).toBeEnabled()
-    expect(within(getStep01Panel()).getByRole('button', { name: 'Accept Portrait' })).toBeDisabled()
+    expect(within(getStep01Panel()).getByRole('button', { name: 'Generate 2D' })).toBeEnabled()
+    expect(within(getStep01Panel()).queryByRole('button', { name: 'Accept Portrait' })).toBeNull()
 
-    expect(within(getStep02Panel()).getByRole('button', { name: 'Generate 2D' })).toBeDisabled()
-    expect(within(getStep02Panel()).getByRole('button', { name: 'Accept Multiview' })).toBeDisabled()
+    expect(within(getStep02Panel()).queryByRole('button', { name: 'Generate 2D' })).toBeNull()
+    expect(within(getStep02Panel()).queryByRole('button', { name: 'Accept Multiview' })).toBeNull()
 
-    expect(within(getStep03Panel()).getByRole('button', { name: 'Generate 3D' })).toBeDisabled()
-    expect(within(getStep03Panel()).getByRole('button', { name: 'AutoRig' })).toBeDisabled()
-    expect(within(getStep03Panel()).getByRole('button', { name: 'Animate' })).toBeDisabled()
-    expect(within(getStep03Panel()).getByRole('button', { name: 'Accept 3D' })).toBeDisabled()
+    expect(within(getStep03Panel()).queryByRole('button', { name: 'Generate 3D' })).toBeNull()
+    expect(within(getStep03Panel()).queryByRole('button', { name: 'AutoRig' })).toBeNull()
+    expect(within(getStep03Panel()).queryByRole('button', { name: 'Animate' })).toBeNull()
+    expect(within(getStep03Panel()).queryByRole('button', { name: 'Accept 3D' })).toBeNull()
 
-    expect(within(getStep04Panel()).getByRole('button', { name: 'Generate 2.5D' })).toBeDisabled()
+    expect(within(getStep04Panel()).queryByRole('button', { name: 'Generate 2.5D' })).toBeNull()
     expect(within(getStep04Panel()).getByRole('button', { name: 'Download' })).toBeDisabled()
+
+    expect(getDevActionButton('Generate 2D')).toBeDisabled()
+    expect(getDevActionButton('Generate 3D')).toBeDisabled()
+    expect(getDevActionButton('AutoRig')).toBeDisabled()
+    expect(getDevActionButton('Animate')).toBeDisabled()
+    expect(getDevActionButton('Generate 2.5D')).toBeDisabled()
   })
 
   it('adapts sprite timing to clip duration with sane bounds', () => {
@@ -414,18 +428,17 @@ describe('App', () => {
     expect(resolveAnimatedSpriteDelayMs(undefined, 90)).toBe(90)
   })
 
-  it('unlocks step 02 only after Accept Portrait and does not auto-generate multiview', async () => {
+  it('auto-generates multiview after Generate 2D and unlocks step 03', async () => {
     render(<App />)
     const user = userEvent.setup()
 
-    await generatePortraitAndAccept(user)
+    await generatePfp(user)
 
-    expect(generateMultiview).not.toHaveBeenCalled()
-    expect(within(getStep02Panel()).getByRole('button', { name: 'Generate 2D' })).toBeEnabled()
-    expect(getProgressFill()).toHaveAttribute('data-step-index', '2')
+    expect(generateMultiview).toHaveBeenCalledTimes(1)
+    expect(getProgressFill()).toHaveAttribute('data-step-index', '3')
   })
 
-  it('runs step 02 generation and unlocks step 03 on step 02 accept', async () => {
+  it('uses the expected payload for automatic multiview generation', async () => {
     render(<App />)
     const user = userEvent.setup()
 
@@ -438,7 +451,7 @@ describe('App', () => {
       multiviewPrompt: expect.any(String),
       mode: 'full',
     })
-    expect(within(getStep03Panel()).getByRole('button', { name: 'Generate 3D' })).toBeEnabled()
+    expect(getDevActionButton('Generate 3D')).toBeEnabled()
     expect(getProgressFill()).toHaveAttribute('data-step-index', '3')
   })
 
@@ -479,16 +492,14 @@ describe('App', () => {
     await unlockStep03(user)
 
     const step03Panel = getStep03Panel()
-    const step04Panel = getStep04Panel()
-    const generate3DButton = within(step03Panel).getByRole('button', { name: 'Generate 3D' })
-    const autoRigButton = within(step03Panel).getByRole('button', { name: 'AutoRig' })
-    const animateButton = within(step03Panel).getByRole('button', { name: 'Animate' })
-    const accept3DButton = within(step03Panel).getByRole('button', { name: 'Accept 3D' })
+    const generate3DButton = getDevActionButton('Generate 3D')
+    const autoRigButton = getDevActionButton('AutoRig')
+    const animateButton = getDevActionButton('Animate')
+    const generate25dButton = getDevActionButton('Generate 2.5D')
 
     expect(autoRigButton).toBeDisabled()
     expect(animateButton).toBeDisabled()
-    expect(accept3DButton).toBeDisabled()
-    expect(within(step04Panel).getByRole('button', { name: 'Generate 2.5D' })).toBeDisabled()
+    expect(generate25dButton).toBeDisabled()
 
     await user.click(generate3DButton)
     await waitFor(() => expect(createTripoTask).toHaveBeenCalledTimes(1))
@@ -510,16 +521,13 @@ describe('App', () => {
         animations: DEFAULT_RETARGET_ANIMATIONS,
       }),
     )
-    expect(accept3DButton).toBeDisabled()
+    await waitFor(() => expect(generate25dButton).toBeEnabled(), { timeout: 8000 })
 
-    await waitFor(() => expect(accept3DButton).toBeEnabled(), { timeout: 8000 })
-    await user.click(accept3DButton)
-
-    expect(within(step04Panel).getByRole('button', { name: 'Generate 2.5D' })).toBeEnabled()
+    expect(generate25dButton).toBeEnabled()
     expect(getProgressFill()).toHaveAttribute('data-step-index', '3')
   }, 25000)
 
-  it('runs Generate 3D Auto through rigging, animation, and 2.5D capture', async () => {
+  it('runs main Generate 3D through rigging, animation, and 2.5D capture', async () => {
     createTripoTask.mockResolvedValue({ taskId: 'model-task', status: 'queued' })
     createTripoRigTask.mockResolvedValue({ taskId: 'rig-task', status: 'queued' })
     createTripoRetargetTask.mockResolvedValue({ taskId: 'retarget-task', status: 'queued' })
@@ -552,7 +560,7 @@ describe('App', () => {
     const user = userEvent.setup()
     await unlockStep03(user)
 
-    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Generate 3D Auto' }))
+    await user.click(within(getStep02Panel()).getByRole('button', { name: 'Generate 3D' }))
 
     await waitFor(() =>
       expect(createTripoTask).toHaveBeenCalledWith(
@@ -617,7 +625,7 @@ describe('App', () => {
     const user = userEvent.setup()
     await unlockStep03(user)
 
-    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Generate 3D Auto' }))
+    await user.click(within(getStep02Panel()).getByRole('button', { name: 'Generate 3D' }))
 
     await waitFor(() => expect(createTripoRigTask).toHaveBeenCalledWith('model-task'))
     await waitFor(() =>
@@ -664,27 +672,19 @@ describe('App', () => {
     const user = userEvent.setup()
     await unlockStep03(user)
 
-    const step03Panel = getStep03Panel()
     const step04Panel = getStep04Panel()
+    const generate3DButton = getDevActionButton('Generate 3D')
+    const autoRigButton = getDevActionButton('AutoRig')
+    const animateButton = getDevActionButton('Animate')
+    const generate25dButton = getDevActionButton('Generate 2.5D')
 
-    await user.click(within(step03Panel).getByRole('button', { name: 'Generate 3D' }))
-    await waitFor(
-      () => expect(within(step03Panel).getByRole('button', { name: 'AutoRig' })).toBeEnabled(),
-      { timeout: 8000 },
-    )
-    await user.click(within(step03Panel).getByRole('button', { name: 'AutoRig' }))
-    await waitFor(
-      () => expect(within(step03Panel).getByRole('button', { name: 'Animate' })).toBeEnabled(),
-      { timeout: 8000 },
-    )
-    await user.click(within(step03Panel).getByRole('button', { name: 'Animate' }))
-    await waitFor(
-      () => expect(within(step03Panel).getByRole('button', { name: 'Accept 3D' })).toBeEnabled(),
-      { timeout: 12000 },
-    )
-    await user.click(within(step03Panel).getByRole('button', { name: 'Accept 3D' }))
+    await user.click(generate3DButton)
+    await waitFor(() => expect(autoRigButton).toBeEnabled(), { timeout: 8000 })
+    await user.click(autoRigButton)
+    await waitFor(() => expect(animateButton).toBeEnabled(), { timeout: 8000 })
+    await user.click(animateButton)
+    await waitFor(() => expect(generate25dButton).toBeEnabled(), { timeout: 12000 })
 
-    const generate25dButton = within(step04Panel).getByRole('button', { name: 'Generate 2.5D' })
     const downloadButton = within(step04Panel).getByRole('button', { name: 'Download' })
 
     await user.click(generate25dButton)
@@ -739,10 +739,9 @@ describe('App', () => {
     await unlockStep03(user)
 
     const step03Panel = getStep03Panel()
-    const generate3DButton = within(step03Panel).getByRole('button', { name: 'Generate 3D' })
-    const autoRigButton = within(step03Panel).getByRole('button', { name: 'AutoRig' })
-    const animateButton = within(step03Panel).getByRole('button', { name: 'Animate' })
-    const accept3DButton = within(step03Panel).getByRole('button', { name: 'Accept 3D' })
+    const generate3DButton = getDevActionButton('Generate 3D')
+    const autoRigButton = getDevActionButton('AutoRig')
+    const animateButton = getDevActionButton('Animate')
     const previewSelect = within(step03Panel).getByLabelText('3D model animation preview')
 
     await user.click(generate3DButton)
@@ -754,7 +753,6 @@ describe('App', () => {
     await user.selectOptions(previewSelect, 'apose')
     expect(previewSelect).toHaveValue('apose')
 
-    await waitFor(() => expect(accept3DButton).toBeEnabled(), { timeout: 12000 })
     await waitFor(() => expect(previewSelect).toHaveValue('walk'), { timeout: 12000 })
   }, 30000)
 
@@ -831,10 +829,9 @@ describe('App', () => {
     await unlockStep03(user)
 
     const step03Panel = getStep03Panel()
-    const generate3DButton = within(step03Panel).getByRole('button', { name: 'Generate 3D' })
-    const autoRigButton = within(step03Panel).getByRole('button', { name: 'AutoRig' })
-    const animateButton = within(step03Panel).getByRole('button', { name: 'Animate' })
-    const accept3DButton = within(step03Panel).getByRole('button', { name: 'Accept 3D' })
+    const generate3DButton = getDevActionButton('Generate 3D')
+    const autoRigButton = getDevActionButton('AutoRig')
+    const animateButton = getDevActionButton('Animate')
     const previewSelect = within(step03Panel).getByLabelText('3D model animation preview')
 
     await user.click(generate3DButton)
@@ -851,7 +848,6 @@ describe('App', () => {
         ),
       { timeout: 15000 },
     )
-    await waitFor(() => expect(accept3DButton).toBeEnabled(), { timeout: 15000 })
     expect(previewSelect).toHaveValue('walk')
   }, 30000)
 
@@ -887,10 +883,9 @@ describe('App', () => {
     await unlockStep03(user)
 
     const step03Panel = getStep03Panel()
-    const generate3DButton = within(step03Panel).getByRole('button', { name: 'Generate 3D' })
-    const autoRigButton = within(step03Panel).getByRole('button', { name: 'AutoRig' })
-    const animateButton = within(step03Panel).getByRole('button', { name: 'Animate' })
-    const accept3DButton = within(step03Panel).getByRole('button', { name: 'Accept 3D' })
+    const generate3DButton = getDevActionButton('Generate 3D')
+    const autoRigButton = getDevActionButton('AutoRig')
+    const animateButton = getDevActionButton('Animate')
     const previewSelect = within(step03Panel).getByLabelText('3D model animation preview')
 
     await user.click(generate3DButton)
@@ -899,7 +894,9 @@ describe('App', () => {
     await waitFor(() => expect(animateButton).toBeEnabled(), { timeout: 8000 })
     await user.click(animateButton)
 
-    await waitFor(() => expect(accept3DButton).toBeEnabled(), { timeout: 12000 })
+    await waitFor(() => expect(screen.getByTestId('viewer-stub')).toBeInTheDocument(), {
+      timeout: 12000,
+    })
     expect(screen.getByTestId('viewer-stub')).toHaveAttribute('data-animation-selection', 'walk')
     expect(screen.getByTestId('viewer-stub')).toHaveAttribute('data-animation-clip-index', '0')
 
@@ -943,9 +940,9 @@ describe('App', () => {
     await unlockStep03(user)
 
     const step03Panel = getStep03Panel()
-    const generate3DButton = within(step03Panel).getByRole('button', { name: 'Generate 3D' })
-    const autoRigButton = within(step03Panel).getByRole('button', { name: 'AutoRig' })
-    const animateButton = within(step03Panel).getByRole('button', { name: 'Animate' })
+    const generate3DButton = getDevActionButton('Generate 3D')
+    const autoRigButton = getDevActionButton('AutoRig')
+    const animateButton = getDevActionButton('Animate')
     const previewSelect = within(step03Panel).getByLabelText('3D model animation preview')
 
     await user.click(generate3DButton)
@@ -1110,7 +1107,7 @@ describe('App', () => {
       screen.getByLabelText('Retarget Animations'),
       'preset:biped:run preset:biped:slash',
     )
-    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Animate' }))
+    await user.click(getDevActionButton('Animate'))
 
     await waitFor(() =>
       expect(createTripoRetargetTask).toHaveBeenCalledWith('rig-task-dev', {
@@ -1130,7 +1127,7 @@ describe('App', () => {
           portraitPromptPreset: 'preset',
           spriteSize: 64,
           tripoAnimationMode: 'animated',
-          tripoRetargetAnimations: 'preset:biped:run preset:biped:standing_relax',
+          tripoRetargetAnimations: 'preset:biped:run preset:biped:look_around',
           tripoRetargetAnimationName: '',
           tripoMeshQuality: 'standard',
           tripoTextureQuality: 'standard',
@@ -1171,11 +1168,12 @@ describe('App', () => {
     expect(within(step03Select).getByRole('option', { name: 'Idle' })).toBeInTheDocument()
     expect(within(step04Select).getByRole('option', { name: 'Idle' })).toBeInTheDocument()
 
-    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Animate' }))
+    await openDevPanel(user)
+    await user.click(getDevActionButton('Animate'))
 
     await waitFor(() =>
       expect(createTripoRetargetTask).toHaveBeenCalledWith('rig-task-look-around', {
-        animations: ['preset:biped:run', 'preset:biped:standing_relax'],
+        animations: ['preset:biped:run', 'preset:biped:look_around'],
       }),
     )
   })
@@ -1219,10 +1217,9 @@ describe('App', () => {
     const user = userEvent.setup()
     await unlockStep03(user)
 
-    const step03Panel = getStep03Panel()
-    const generate3DButton = within(step03Panel).getByRole('button', { name: 'Generate 3D' })
-    const autoRigButton = within(step03Panel).getByRole('button', { name: 'AutoRig' })
-    const animateButton = within(step03Panel).getByRole('button', { name: 'Animate' })
+    const generate3DButton = getDevActionButton('Generate 3D')
+    const autoRigButton = getDevActionButton('AutoRig')
+    const animateButton = getDevActionButton('Animate')
 
     await user.click(generate3DButton)
     await waitFor(() => expect(autoRigButton).toBeEnabled(), { timeout: 8000 })
@@ -1272,27 +1269,24 @@ describe('App', () => {
     const user = userEvent.setup()
     await unlockStep03(user)
     const step03Panel = getStep03Panel()
-    const step04Panel = getStep04Panel()
 
-    const generate3DButton = within(step03Panel).getByRole('button', { name: 'Generate 3D' })
-    const autoRigButton = within(step03Panel).getByRole('button', { name: 'AutoRig' })
-    const animateButton = within(step03Panel).getByRole('button', { name: 'Animate' })
-    const accept3DButton = within(step03Panel).getByRole('button', { name: 'Accept 3D' })
+    const generate3DButton = getDevActionButton('Generate 3D')
+    const autoRigButton = getDevActionButton('AutoRig')
+    const animateButton = getDevActionButton('Animate')
+    const generate25dButton = getDevActionButton('Generate 2.5D')
 
     await user.click(generate3DButton)
     await waitFor(() => expect(autoRigButton).toBeEnabled(), { timeout: 8000 })
     await user.click(autoRigButton)
     await waitFor(() => expect(animateButton).toBeEnabled(), { timeout: 8000 })
     await user.click(animateButton)
-    await waitFor(() => expect(accept3DButton).toBeEnabled(), { timeout: 8000 })
-    await user.click(accept3DButton)
-    expect(within(step04Panel).getByRole('button', { name: 'Generate 2.5D' })).toBeEnabled()
+    await waitFor(() => expect(generate25dButton).toBeEnabled(), { timeout: 8000 })
+    expect(generate25dButton).toBeEnabled()
 
     await user.click(generate3DButton)
     expect(autoRigButton).toBeDisabled()
     expect(animateButton).toBeDisabled()
-    expect(accept3DButton).toBeDisabled()
-    expect(within(step04Panel).getByRole('button', { name: 'Generate 2.5D' })).toBeDisabled()
+    expect(generate25dButton).toBeDisabled()
   }, 25000)
 
   it('keeps step 04 locked when step 03 fails and sanitizes provider names in top bar', async () => {
@@ -1302,13 +1296,13 @@ describe('App', () => {
     const user = userEvent.setup()
     await unlockStep03(user)
 
-    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Generate 3D' }))
+    await user.click(getDevActionButton('Generate 3D'))
 
     await waitFor(() => {
       expect(screen.getByText(/3D service failed via image service backend/i)).toBeInTheDocument()
     })
     expect(screen.queryByText(/tripo failed via gemini backend/i)).not.toBeInTheDocument()
-    expect(within(getStep04Panel()).getByRole('button', { name: 'Generate 2.5D' })).toBeDisabled()
+    expect(getDevActionButton('Generate 2.5D')).toBeDisabled()
   })
 
   it('keeps progress on step 03 while step 04 is unlocked but not complete', () => {
@@ -1405,16 +1399,17 @@ describe('App', () => {
     expect(within(step03Select).getByRole('option', { name: 'A-pose' })).toBeInTheDocument()
     expect(within(step03Select).getByRole('option', { name: 'Walk' })).toBeInTheDocument()
     expect(within(step03Select).getByRole('option', { name: 'Run' })).toBeInTheDocument()
-    expect(within(step03Select).queryByRole('option', { name: 'Idle' })).toBeNull()
+    expect(within(step03Select).getByRole('option', { name: 'Idle' })).toBeInTheDocument()
     expect(within(step03Select).queryByRole('option', { name: 'Slash' })).toBeNull()
     expect(within(step04Select).getByRole('option', { name: '360' })).toBeInTheDocument()
     expect(within(step04Select).getByRole('option', { name: 'Walk' })).toBeInTheDocument()
     expect(within(step04Select).getByRole('option', { name: 'Run' })).toBeInTheDocument()
-    expect(within(step04Select).queryByRole('option', { name: 'Idle' })).toBeNull()
+    expect(within(step04Select).getByRole('option', { name: 'Idle' })).toBeInTheDocument()
     expect(within(step04Select).queryByRole('option', { name: 'Slash' })).toBeNull()
     expect(within(step04Select).getAllByRole('option').map((option) => option.textContent)).toEqual([
       'Walk',
       'Run',
+      'Idle',
       '360',
     ])
   })
@@ -1430,21 +1425,37 @@ describe('App', () => {
     expect(within(spriteSizeSelect).getByRole('option', { name: '256x256' })).toBeInTheDocument()
   })
 
-  it('shows Look controls in DEV with neutral defaults', async () => {
+  it('shows Look controls in DEV with the configured default relight values', async () => {
     render(<App />)
     const user = userEvent.setup()
 
     await user.click(screen.getByRole('button', { name: 'DEV' }))
 
-    expect(screen.getByRole('combobox', { name: /Tone Mapping/i })).toHaveValue('none')
-    expect(screen.getByRole('slider', { name: /Exposure/i })).toHaveValue('1')
-    expect(screen.getByRole('slider', { name: /Material Roughness/i })).toHaveValue('1')
+    expect(screen.getByRole('combobox', { name: /Tone Mapping/i })).toHaveValue('aces')
+    expect(screen.getByRole('slider', { name: /Exposure/i })).toHaveValue('0.68')
+    expect(screen.getByRole('slider', { name: /Environment/i })).toHaveValue('0.75')
+    expect(screen.getByRole('slider', { name: /Key Light/i })).toHaveValue('1.22')
+    expect(screen.getByRole('slider', { name: /Fill Light/i })).toHaveValue('1.22')
+    expect(screen.getByRole('slider', { name: /Rim Light/i })).toHaveValue('1.2')
+    expect(screen.getByRole('slider', { name: /Ambient/i })).toHaveValue('0.82')
+    expect(screen.getByRole('slider', { name: /Material Roughness/i })).toHaveValue('0.48')
     expect(screen.getByRole('slider', { name: /Contrast/i })).toHaveValue('1')
     expect(screen.getByRole('slider', { name: /Vibrance/i })).toHaveValue('0')
-    expect(screen.getByRole('slider', { name: /Sharpen/i })).toHaveValue('0')
+    expect(screen.getByRole('slider', { name: /Sharpen/i })).toHaveValue('0.04')
   })
 
-  it('defaults DEV PBR to true and lets Generate 3D send false', async () => {
+  it('defaults DEV model quality settings to Ultra / Ultra / 64000', async () => {
+    render(<App />)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'DEV' }))
+
+    expect(screen.getByRole('combobox', { name: 'Mesh Quality' })).toHaveValue('detailed')
+    expect(screen.getByRole('combobox', { name: 'Texture Quality' })).toHaveValue('detailed')
+    expect(screen.getByRole('spinbutton', { name: 'Face Limit' })).toHaveValue(64000)
+  })
+
+  it('defaults DEV PBR to false and lets Generate 3D send true', async () => {
     createTripoTask.mockResolvedValue({ taskId: 'model-task', status: 'queued' })
 
     render(<App />)
@@ -1452,16 +1463,16 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'DEV' }))
     const pbrSelect = screen.getByRole('combobox', { name: 'PBR' })
-    expect(pbrSelect).toHaveValue('true')
-    await user.selectOptions(pbrSelect, 'false')
+    expect(pbrSelect).toHaveValue('false')
+    await user.selectOptions(pbrSelect, 'true')
 
     await unlockStep03(user)
-    await user.click(within(getStep03Panel()).getByRole('button', { name: 'Generate 3D' }))
+    await user.click(getDevActionButton('Generate 3D'))
 
     await waitFor(() =>
       expect(createTripoTask).toHaveBeenCalledWith(
         expect.objectContaining({
-          pbr: false,
+          pbr: true,
         }),
       ),
     )

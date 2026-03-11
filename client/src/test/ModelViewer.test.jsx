@@ -14,6 +14,8 @@ describe('ModelViewer', () => {
     const rendererDispose = vi.fn()
     const controlsDispose = vi.fn()
     const controlsReset = vi.fn()
+    const composerAddPass = vi.fn()
+    const outputPassMarker = { isOutputPass: true }
 
     vi.doMock('three', () => {
       class Vector3 {
@@ -154,7 +156,7 @@ describe('ModelViewer', () => {
 
     vi.doMock('three/examples/jsm/postprocessing/EffectComposer.js', () => ({
       EffectComposer: class {
-        addPass = vi.fn()
+        addPass = composerAddPass
         setPixelRatio = vi.fn()
         setSize = vi.fn()
         render = vi.fn()
@@ -174,6 +176,14 @@ describe('ModelViewer', () => {
       ShaderPass: class {
         constructor(shader) {
           this.uniforms = shader.uniforms
+        }
+      },
+    }))
+
+    vi.doMock('three/examples/jsm/postprocessing/OutputPass.js', () => ({
+      OutputPass: class {
+        constructor() {
+          return outputPassMarker
         }
       },
     }))
@@ -216,6 +226,7 @@ describe('ModelViewer', () => {
     await waitFor(() => {
       expect(sceneAdd).toHaveBeenCalled()
     })
+    expect(composerAddPass).toHaveBeenCalledWith(outputPassMarker)
 
     unmount()
 
