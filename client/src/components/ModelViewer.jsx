@@ -5,6 +5,10 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { retargetClip } from 'three/examples/jsm/utils/SkeletonUtils.js'
+import {
+  DEFAULT_ANIMATED_SPRITE_DELAY_MS,
+  resolveAnimatedSpriteCaptureDelayMs,
+} from '../lib/spriteTiming'
 
 const VIEW_CAPTURE_PRESETS = [
   { key: 'front', label: 'Front', yawDeg: 0 },
@@ -18,9 +22,13 @@ const VIEW_CAPTURE_PRESETS = [
 ]
 
 const ANIMATED_SPRITE_CAPTURE_FOV = 24
-const ANIMATED_SPRITE_CAPTURE_FRAME_COUNT = 16
-const ANIMATED_SPRITE_FRAME_DELAY_MS = 90
+const ANIMATED_SPRITE_CAPTURE_FRAME_COUNT = 30
 const ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG = 35.264
+const VIEWER_ENVIRONMENT_INTENSITY = 0.26
+const VIEWER_KEY_LIGHT_INTENSITY = 1.05
+const VIEWER_FILL_LIGHT_INTENSITY = 0.18
+const VIEWER_RIM_LIGHT_INTENSITY = 0.12
+const VIEWER_AMBIENT_LIGHT_INTENSITY = 0.14
 
 const buildFloorGrid = (object) => {
   const box = new THREE.Box3().setFromObject(object)
@@ -241,26 +249,28 @@ export function ModelViewer({
       renderer.setClearColor(0x000000, 0)
     }
     renderer.outputColorSpace = THREE.SRGBColorSpace
-    renderer.toneMapping = THREE.ACESFilmicToneMapping
-    renderer.toneMappingExposure = 0.88
+    renderer.toneMapping = THREE.NoToneMapping
+    renderer.toneMappingExposure = 1
     container.appendChild(renderer.domElement)
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer)
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
+    scene.environmentIntensity = VIEWER_ENVIRONMENT_INTENSITY
 
-    const keyLight = new THREE.DirectionalLight('#fff3e5', 1.55)
+    // Keep the viewer close to the source renders instead of a stylized studio relight.
+    const keyLight = new THREE.DirectionalLight('#ffffff', VIEWER_KEY_LIGHT_INTENSITY)
     keyLight.position.set(2.7, 3.5, 5.4)
     scene.add(keyLight)
 
-    const fillLight = new THREE.DirectionalLight('#cdd9ff', 0.42)
+    const fillLight = new THREE.DirectionalLight('#ffffff', VIEWER_FILL_LIGHT_INTENSITY)
     fillLight.position.set(-3.4, 1.9, 2.6)
     scene.add(fillLight)
 
-    const rimLight = new THREE.DirectionalLight('#88c8b6', 0.7)
+    const rimLight = new THREE.DirectionalLight('#ffffff', VIEWER_RIM_LIGHT_INTENSITY)
     rimLight.position.set(-4.2, 2.1, -3.2)
     scene.add(rimLight)
 
-    const ambientLight = new THREE.AmbientLight('#ffffff', 0.34)
+    const ambientLight = new THREE.AmbientLight('#ffffff', VIEWER_AMBIENT_LIGHT_INTENSITY)
     scene.add(ambientLight)
 
     const controls = new OrbitControls(camera, renderer.domElement)
@@ -362,6 +372,12 @@ export function ModelViewer({
       }
 
       const resolvedFrameCount = Math.max(Math.round(Number(frameCount) || 0), 2)
+      const resolvedDelayMs = resolveAnimatedSpriteCaptureDelayMs(
+        activeAnimationDuration,
+        resolvedFrameCount,
+        DEFAULT_ANIMATED_SPRITE_DELAY_MS,
+        animationSelectionKey,
+      )
       const originalTarget = controls.target.clone()
       const originalPosition = camera.position.clone()
       const originalQuaternion = camera.quaternion.clone()
@@ -412,7 +428,7 @@ export function ModelViewer({
           sprites[preset.key] = {
             label: preset.label,
             frameDataUrls,
-            delayMs: ANIMATED_SPRITE_FRAME_DELAY_MS,
+            delayMs: resolvedDelayMs,
           }
         }
       } finally {

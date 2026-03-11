@@ -129,7 +129,7 @@ describe('ModelViewer', () => {
         },
         LoopRepeat: 'LoopRepeat',
         SRGBColorSpace: 'srgb',
-        ACESFilmicToneMapping: 'aces',
+        NoToneMapping: 'none',
       }
     })
 

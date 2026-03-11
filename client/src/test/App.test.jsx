@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import App, { resolveAnimatedSpriteDelayMs } from '../App'
+import App from '../App'
 import {
   createTripoFrontBackTask,
   createTripoFrontTask,
@@ -16,6 +16,7 @@ import {
   getTripoTask,
   restartDevServer,
 } from '../api/characterApi'
+import { resolveAnimatedSpriteCaptureDelayMs, resolveAnimatedSpriteDelayMs } from '../lib/spriteTiming'
 
 const DEFAULT_RETARGET_ANIMATIONS = ['preset:biped:walk', 'preset:biped:run']
 const DEFAULT_ANIMATION_KEYS = ['walk', 'run']
@@ -406,9 +407,11 @@ describe('App', () => {
     expect(within(getStep04Panel()).getByRole('button', { name: 'Download' })).toBeDisabled()
   })
 
-  it('slows look around sprite timing without changing the default animated delay', () => {
-    expect(resolveAnimatedSpriteDelayMs('look_around', 90)).toBe(140)
-    expect(resolveAnimatedSpriteDelayMs('run', 90)).toBe(90)
+  it('adapts sprite timing to clip duration with sane bounds', () => {
+    expect(resolveAnimatedSpriteCaptureDelayMs(2.4, 30, 90)).toBe(80)
+    expect(resolveAnimatedSpriteCaptureDelayMs(2.4, 30, 90, 'look_around')).toBe(160)
+    expect(resolveAnimatedSpriteCaptureDelayMs(0.8, 30, 90)).toBe(40)
+    expect(resolveAnimatedSpriteDelayMs(undefined, 90)).toBe(90)
   })
 
   it('unlocks step 02 only after Accept Portrait and does not auto-generate multiview', async () => {
@@ -626,6 +629,69 @@ describe('App', () => {
       () => expect(within(getStep04Panel()).getByRole('button', { name: 'Download' })).toBeEnabled(),
       { timeout: 15000 },
     )
+  }, 30000)
+
+  it('re-enables Download after rerunning Generate 2.5D over an existing sprite bundle', async () => {
+    createTripoTask.mockResolvedValue({ taskId: 'model-task', status: 'queued' })
+    createTripoRigTask.mockResolvedValue({ taskId: 'rig-task', status: 'queued' })
+    createTripoRetargetTask.mockResolvedValue({ taskId: 'retarget-task', status: 'queued' })
+    viewerCaptureEightViewsMock.mockResolvedValue(makeCapturedModelViews())
+    viewerCaptureAnimatedSpriteDirectionsMock.mockResolvedValue(makeCapturedSpriteDirections())
+    getTripoTask.mockImplementation(async (taskId) => {
+      if (taskId === 'model-task') {
+        return makeSuccessfulTask(
+          'model-task',
+          'multiview_to_model',
+          'model',
+          '/api/tripo/tasks/model-task/model?variant=model&animationMode=static',
+        )
+      }
+      if (taskId === 'rig-task') {
+        return makeSuccessfulTask(
+          'rig-task',
+          'animate_rig',
+          'rigged_model',
+          '/api/tripo/tasks/rig-task/model?variant=rigged_model&animationMode=static',
+        )
+      }
+      if (taskId === 'retarget-task') {
+        return makeMultiAnimationTask('retarget-task')
+      }
+      return { taskId, status: 'running', progress: 35, outputs: null }
+    })
+
+    render(<App />)
+    const user = userEvent.setup()
+    await unlockStep03(user)
+
+    const step03Panel = getStep03Panel()
+    const step04Panel = getStep04Panel()
+
+    await user.click(within(step03Panel).getByRole('button', { name: 'Generate 3D' }))
+    await waitFor(
+      () => expect(within(step03Panel).getByRole('button', { name: 'AutoRig' })).toBeEnabled(),
+      { timeout: 8000 },
+    )
+    await user.click(within(step03Panel).getByRole('button', { name: 'AutoRig' }))
+    await waitFor(
+      () => expect(within(step03Panel).getByRole('button', { name: 'Animate' })).toBeEnabled(),
+      { timeout: 8000 },
+    )
+    await user.click(within(step03Panel).getByRole('button', { name: 'Animate' }))
+    await waitFor(
+      () => expect(within(step03Panel).getByRole('button', { name: 'Accept 3D' })).toBeEnabled(),
+      { timeout: 12000 },
+    )
+    await user.click(within(step03Panel).getByRole('button', { name: 'Accept 3D' }))
+
+    const generate25dButton = within(step04Panel).getByRole('button', { name: 'Generate 2.5D' })
+    const downloadButton = within(step04Panel).getByRole('button', { name: 'Download' })
+
+    await user.click(generate25dButton)
+    await waitFor(() => expect(downloadButton).toBeEnabled(), { timeout: 12000 })
+
+    await user.click(generate25dButton)
+    await waitFor(() => expect(downloadButton).toBeEnabled(), { timeout: 12000 })
   }, 30000)
 
   it('switches 3D preview to Walk when the configured animation set completes', async () => {

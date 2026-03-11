@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
+const DEFAULT_PREVIEW_FRAME_DELAY_MS = 110
+
 const SPRITE_VIEW_SLOTS = [
   { key: 'front', label: 'Front', aliases: ['front'] },
   { key: 'front_right', label: 'FrontRight', aliases: ['front_right', 'frontRight', 'frontright'] },
@@ -44,13 +46,19 @@ const resolveDirectionByAliases = (directions, aliases = []) => {
 
 const AnimatedSpriteTile = ({ direction, label, emptyCopy }) => {
   const frames = useMemo(() => getFrames(direction), [direction])
+  const frameDelayMs = useMemo(() => {
+    const normalizedDelayMs = Number(direction?.delayMs)
+    return Number.isFinite(normalizedDelayMs) && normalizedDelayMs > 0
+      ? normalizedDelayMs
+      : DEFAULT_PREVIEW_FRAME_DELAY_MS
+  }, [direction?.delayMs])
   const [frameIndex, setFrameIndex] = useState(0)
   const [hasImageError, setHasImageError] = useState(false)
 
   useEffect(() => {
     setFrameIndex(0)
     setHasImageError(false)
-  }, [frames.length, direction?.previewDataUrl])
+  }, [frames.length, direction?.previewDataUrl, frameDelayMs])
 
   useEffect(() => {
     if (frames.length <= 1) {
@@ -59,12 +67,12 @@ const AnimatedSpriteTile = ({ direction, label, emptyCopy }) => {
 
     const intervalId = window.setInterval(() => {
       setFrameIndex((value) => (value + 1) % frames.length)
-    }, 110)
+    }, frameDelayMs)
 
     return () => {
       window.clearInterval(intervalId)
     }
-  }, [frames])
+  }, [frameDelayMs, frames])
 
   if (frames.length === 0 || hasImageError) {
     return (
