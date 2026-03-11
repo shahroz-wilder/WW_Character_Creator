@@ -22,6 +22,10 @@ import { MultiviewGrid } from './components/MultiviewGrid'
 import { MultiviewPromptEditor } from './components/MultiviewPromptEditor'
 import { PortraitReviewCard } from './components/PortraitReviewCard'
 import { SpriteGrid } from './components/SpriteGrid'
+import {
+  buildCombinedAnimationRowsPlan,
+  resolveCombinedAnimationRowFrameIndex,
+} from './lib/combinedSpriteGif'
 import { downloadBlob, downloadDataUrl, downloadFromUrl } from './lib/download'
 import { createHistoryEntry, createRunId, updateHistoryEntry } from './lib/historyStore'
 import {
@@ -1337,6 +1341,7 @@ function App() {
   }))
   const viewerCaptureApiRef = useRef(null)
   const isStep04PreviewCaptureRef = useRef(false)
+  const isModelPreviewUserOverrideRef = useRef(false)
   const pendingTaskTimingByTaskIdRef = useRef(new Map())
   const statusProgressTrackRef = useRef(null)
   const step01PanelRef = useRef(null)
@@ -1418,6 +1423,7 @@ function App() {
     rigTaskId: step03TaskState.rigTaskId,
     priority: APOSE_PREVIEW_MODEL_VARIANT_PRIORITY,
   })
+  const hasAposePreviewModelUrl = Boolean(aposePreviewModelUrl)
   const requestedModelVariant =
     modelPreviewMode === 'apose' ? aposePreviewModelVariant : animatedModelVariant
   const fallbackModelVariant =
@@ -1557,10 +1563,23 @@ function App() {
   const canDownloadFinalBundle =
     isStep04Unlocked && pipelineState.approved.step4 && hasStep04Output && !isPreparingDownloadBundle
   const configuredRetargetAnimationsLabel = configuredRetargetAnimations.join(' ') || 'None'
+  const updateModelPreviewMode = useCallback((nextMode, { userInitiated = false } = {}) => {
+    isModelPreviewUserOverrideRef.current = userInitiated
+    setModelPreviewMode(nextMode)
+  }, [])
   const currentPreviewLabel =
     step03PreviewOptions.find((option) => option.key === modelPreviewMode)?.label ||
     ANIMATION_LABEL_BY_KEY[modelPreviewMode] ||
     'A-pose'
+  const handleModelPreviewSelectionChange = useCallback(
+    (nextValue) => {
+      const normalizedNextValue = normalizeAnimationPreviewKey(nextValue)
+      updateModelPreviewMode(normalizedNextValue, {
+        userInitiated: normalizedNextValue !== 'apose' || availableAnimatedPreviewKeys.length > 0,
+      })
+    },
+    [availableAnimatedPreviewKeys.length, updateModelPreviewMode],
+  )
 
   const currentStepIndex = pipelineState.approved.step4 && hasStep04Output
     ? 4
@@ -1878,23 +1897,24 @@ function App() {
 
   useEffect(() => {
     if (!tripoJob.taskId) {
-      setModelPreviewMode('apose')
+      updateModelPreviewMode('apose')
       return
     }
 
     const normalizedTaskType = getNormalizedTaskType(tripoJob.taskType)
     if (!ANIMATED_TASK_TYPES.has(normalizedTaskType)) {
-      setModelPreviewMode('apose')
+      updateModelPreviewMode('apose')
       return
     }
 
     setModelPreviewMode((currentMode) => {
-      if (
-        currentMode === 'apose' &&
-        isStep04PreviewCaptureRef.current &&
-        step03PreviewOptions.some((option) => option.key === currentMode)
-      ) {
-        return currentMode
+      if (currentMode === 'apose' && step03PreviewOptions.some((option) => option.key === currentMode)) {
+        if (
+          isStep04PreviewCaptureRef.current ||
+          (isModelPreviewUserOverrideRef.current && hasAposePreviewModelUrl)
+        ) {
+          return currentMode
+        }
       }
 
       if (currentMode !== 'apose' && step03PreviewOptions.some((option) => option.key === currentMode)) {
@@ -1903,7 +1923,7 @@ function App() {
 
       return resolvePreferredAnimatedPreviewKey(tripoJob, configuredRetargetAnimations) || 'apose'
     })
-  }, [configuredRetargetAnimations, step03PreviewOptionsKey, tripoJob])
+  }, [configuredRetargetAnimations, hasAposePreviewModelUrl, step03PreviewOptionsKey, tripoJob, updateModelPreviewMode])
 
   useEffect(() => {
     setSpritePreviewMode((currentMode) => {
@@ -2192,6 +2212,114 @@ function App() {
       })
     },
     [buildGifBlobFromFrames],
+  )
+
+  const buildCombinedAnimationRowsGifBlob = useCallback(
+    async ({ spritePayload, animationKeys, fallbackSize = DEV_PRESETS.spriteSize }) => {
+      const normalizedAnimationKeys = sortSpritePreviewAnimationKeys(
+        (Array.isArray(animationKeys) ? animationKeys : []).filter((animationKey) =>
+          hasRequiredSpriteDirections(resolveSpriteAnimationDirections(spritePayload, animationKey)),
+        ),
+      )
+
+      const animationEntries = normalizedAnimationKeys.map((animationKey) => ({
+        animation: animationKey,
+        directions: resolveSpriteAnimationDirections(spritePayload, animationKey),
+      }))
+      const plan = buildCombinedAnimationRowsPlan(animationEntries, {
+        directionKeys: SPRITE_CAPTURE_REQUIRED_KEYS,
+      })
+      const cellSize = Math.max(1, Math.round(Number(fallbackSize) || DEV_PRESETS.spriteSize))
+      const width = cellSize * plan.directionKeys.length
+      const height = cellSize * plan.rows.length
+
+      const [{ default: GIF }, { default: workerScript }] = await Promise.all([
+        import('gif.js'),
+        import('gif.js/dist/gif.worker.js?url'),
+      ])
+      const gif = new GIF({
+        workers: 2,
+        quality: 10,
+        width,
+        height,
+        background: GIF_TRANSPARENT_CSS,
+        transparent: GIF_TRANSPARENT_HEX,
+        workerScript,
+      })
+      const frameCanvas = document.createElement('canvas')
+      frameCanvas.width = width
+      frameCanvas.height = height
+      const frameContext = frameCanvas.getContext('2d')
+
+      if (!frameContext) {
+        throw new Error('2D canvas context is unavailable for combined sprite GIF generation.')
+      }
+
+      const imageCache = new Map()
+      const getCachedImage = async (dataUrl) => {
+        if (!imageCache.has(dataUrl)) {
+          imageCache.set(dataUrl, loadImageFromDataUrl(dataUrl))
+        }
+
+        return imageCache.get(dataUrl)
+      }
+
+      for (let outputFrameIndex = 0; outputFrameIndex < plan.outputFrameCount; outputFrameIndex += 1) {
+        frameContext.clearRect(0, 0, width, height)
+        frameContext.imageSmoothingEnabled = !MODEL_VIEW_PIXEL_ART_MODE
+
+        for (let rowIndex = 0; rowIndex < plan.rows.length; rowIndex += 1) {
+          const row = plan.rows[rowIndex]
+          const sourceFrameIndex = resolveCombinedAnimationRowFrameIndex({
+            outputFrameIndex,
+            outputDelayMs: plan.outputDelayMs,
+            rowFrameDelayMs: row.frameDelayMs,
+            rowFrameCount: row.frameCount,
+          })
+
+          for (let columnIndex = 0; columnIndex < plan.directionKeys.length; columnIndex += 1) {
+            const directionKey = plan.directionKeys[columnIndex]
+            const frames = row.directionFrames?.[directionKey] || []
+            const frameDataUrl = frames[sourceFrameIndex % frames.length] || frames[0]
+            if (!frameDataUrl) {
+              continue
+            }
+
+            const frameImage = await getCachedImage(frameDataUrl)
+            frameContext.drawImage(
+              frameImage,
+              columnIndex * cellSize,
+              rowIndex * cellSize,
+              cellSize,
+              cellSize,
+            )
+          }
+        }
+
+        const frameImageData = frameContext.getImageData(0, 0, width, height)
+        const framePixels = frameImageData.data
+
+        for (let pixelIndex = 0; pixelIndex < framePixels.length; pixelIndex += 4) {
+          const alpha = framePixels[pixelIndex + 3]
+          if (alpha <= GIF_ALPHA_CUTOFF) {
+            framePixels[pixelIndex] = GIF_TRANSPARENT_RGB.r
+            framePixels[pixelIndex + 1] = GIF_TRANSPARENT_RGB.g
+            framePixels[pixelIndex + 2] = GIF_TRANSPARENT_RGB.b
+          }
+          framePixels[pixelIndex + 3] = 255
+        }
+
+        gif.addFrame(frameImageData, {
+          delay: plan.outputDelayMs,
+        })
+      }
+
+      return new Promise((resolve) => {
+        gif.on('finished', (blob) => resolve(blob))
+        gif.render()
+      })
+    },
+    [],
   )
 
   const buildSynthesized360Direction = useCallback((directions) => {
@@ -2661,7 +2789,7 @@ function App() {
         pbr: devSettings.tripoPbr,
         faceLimit: resolvedTripoFaceLimit,
       })
-      setModelPreviewMode('apose')
+      updateModelPreviewMode('apose')
       applyTripoTaskStart(result, {
         animationMode: 'static',
         fallbackTaskType: 'multiview_to_model',
@@ -2692,7 +2820,7 @@ function App() {
         pbr: devSettings.tripoPbr,
         faceLimit: resolvedTripoFaceLimit,
       })
-      setModelPreviewMode('apose')
+      updateModelPreviewMode('apose')
       applyTripoTaskStart(result, {
         animationMode: 'static',
         fallbackTaskType: 'image_to_model',
@@ -2727,7 +2855,7 @@ function App() {
         pbr: devSettings.tripoPbr,
         faceLimit: resolvedTripoFaceLimit,
       })
-      setModelPreviewMode('apose')
+      updateModelPreviewMode('apose')
       applyTripoTaskStart(result, {
         animationMode: 'static',
         fallbackTaskType: 'multiview_to_model',
@@ -2816,7 +2944,7 @@ function App() {
         pbr,
         faceLimit,
       })
-      setModelPreviewMode('apose')
+      updateModelPreviewMode('apose')
       applyTripoTaskStart(result, {
         animationMode: 'static',
         fallbackTaskType: 'multiview_to_model',
@@ -2858,7 +2986,7 @@ function App() {
 
     try {
       const result = await createTripoRigTask(sourceTaskId)
-      setModelPreviewMode('apose')
+      updateModelPreviewMode('apose')
       applyTripoTaskStart(result, {
         animationMode: 'static',
         fallbackTaskType: 'animate_rig',
@@ -2902,7 +3030,7 @@ function App() {
       const result = await createTripoRetargetTask(sourceTaskId, {
         animations: normalizedRequestedAnimations,
       })
-      setModelPreviewMode(configuredAnimationPreviewKey)
+      updateModelPreviewMode(configuredAnimationPreviewKey)
       applyTripoTaskStart(result, {
         animationMode: 'animated',
         fallbackTaskType: 'animate_retarget',
@@ -2940,6 +3068,7 @@ function App() {
     setIsCapturingWalkSprites(true)
     const captureSize = normalizeSpriteSize(devSettings.spriteSize)
     const previousPreviewMode = modelPreviewMode
+    const previousModelPreviewUserOverride = isModelPreviewUserOverrideRef.current
 
     try {
       if (!aposeCaptureModelUrl) {
@@ -2959,7 +3088,7 @@ function App() {
 
       isStep04PreviewCaptureRef.current = true
       flushSync(() => {
-        setModelPreviewMode('apose')
+        updateModelPreviewMode('apose')
       })
       await sleep(0)
       const aposeCaptureApi = await waitForViewerModel('', 'apose')
@@ -2985,7 +3114,7 @@ function App() {
         }
 
         flushSync(() => {
-          setModelPreviewMode(animationKey)
+          updateModelPreviewMode(animationKey)
         })
         await sleep(0)
         const captureApi = await waitForViewerModel(animationModelUrl, animationKey)
@@ -3015,7 +3144,7 @@ function App() {
         ? primaryAnimationKey
         : requestedAnimationKeys[0]
       flushSync(() => {
-        setModelPreviewMode(resolvedPrimaryAnimationKey)
+        updateModelPreviewMode(resolvedPrimaryAnimationKey)
       })
       setSpritePreviewMode(DEFAULT_SPRITE_PREVIEW_KEY)
       setSpriteResult({
@@ -3033,7 +3162,9 @@ function App() {
         requestError?.message || 'Failed to capture animated sprites.',
       )
       setError(nextError)
-      setModelPreviewMode(previousPreviewMode)
+      updateModelPreviewMode(previousPreviewMode, {
+        userInitiated: previousModelPreviewUserOverride,
+      })
       throw new Error(nextError)
     } finally {
       isStep04PreviewCaptureRef.current = false
@@ -3264,6 +3395,12 @@ function App() {
         Number(spriteResult?.spriteSize) || 64,
       )
       spritesFolder?.file('360.gif', shared360Blob)
+      const combinedAnimationRowsBlob = await buildCombinedAnimationRowsGifBlob({
+        spritePayload: spriteResult,
+        animationKeys: requiredSpriteAnimationKeys,
+        fallbackSize: Number(spriteResult?.spriteSize) || 64,
+      })
+      spritesFolder?.file('all_animations.gif', combinedAnimationRowsBlob)
 
       for (const animationKey of requiredSpriteAnimationKeys) {
         const animationFolder = spritesFolder?.folder(animationKey)
@@ -3309,7 +3446,7 @@ function App() {
 
     try {
       const result = await createTripoRigTask(sourceTaskId)
-      setModelPreviewMode('apose')
+      updateModelPreviewMode('apose')
       applyTripoTaskStart(result, {
         animationMode: 'static',
         fallbackTaskType: 'animate_rig',
@@ -3361,7 +3498,7 @@ function App() {
       const result = await createTripoRetargetTask(retargetStartTaskId, {
         animationName: requestedAnimationName,
       })
-      setModelPreviewMode(resolveSingleAnimationPreviewKey(requestedAnimationName))
+      updateModelPreviewMode(resolveSingleAnimationPreviewKey(requestedAnimationName))
       applyTripoTaskStart(result, {
         animationMode: 'animated',
         fallbackTaskType: 'animate_retarget',
@@ -3510,7 +3647,7 @@ function App() {
       setIsCapturingModelViews(false)
       setIsCapturingWalkSprites(false)
       setIsBuildingModelViewGif(false)
-      setModelPreviewMode('apose')
+      updateModelPreviewMode('apose')
       setSpritePreviewMode(DEFAULT_SPRITE_PREVIEW_KEY)
       setDefaultSpritesCacheKey(Date.now())
       setExistingTripoTaskIdInput('')
@@ -3868,9 +4005,7 @@ function App() {
                     id="step03-animation-select"
                     className="panel-heading-select"
                     value={modelPreviewMode}
-                    onChange={(event) =>
-                      setModelPreviewMode(normalizeAnimationPreviewKey(event.target.value))
-                    }
+                    onChange={(event) => handleModelPreviewSelectionChange(event.target.value)}
                     aria-label="3D model animation preview"
                   >
                     {step03PreviewOptions.map((option) => (
@@ -4592,9 +4727,7 @@ function App() {
                 <span>Preview Pose</span>
                 <select
                   value={modelPreviewMode}
-                  onChange={(event) =>
-                    setModelPreviewMode(normalizeAnimationPreviewKey(event.target.value))
-                  }
+                  onChange={(event) => handleModelPreviewSelectionChange(event.target.value)}
                 >
                   {step03PreviewOptions.map((option) => (
                     <option key={option.key} value={option.key}>
