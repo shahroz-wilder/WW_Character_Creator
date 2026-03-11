@@ -138,7 +138,7 @@ orthographic, neutral A-pose, light grey seamless background, sharp focus, No we
     )
   })
 
-  it('maps persisted look-around retarget outputs to the look_around animation key', () => {
+  it('maps persisted standing-relax retarget outputs to the look_around animation key', () => {
     window.localStorage.setItem(
       'ww-character-session-v1',
       JSON.stringify({
@@ -146,7 +146,7 @@ orthographic, neutral A-pose, light grey seamless background, sharp focus, No we
           taskId: 'retarget-task',
           taskType: 'animate_retarget',
           status: 'success',
-          requestedAnimations: ['preset:biped:look_around'],
+          requestedAnimations: ['preset:biped:standing_relax'],
           outputs: {
             modelUrl: '/api/tripo/tasks/retarget-task/model?variant=animation_model',
             downloadUrl: '/api/tripo/tasks/retarget-task/model?variant=animation_model',
@@ -179,6 +179,33 @@ orthographic, neutral A-pose, light grey seamless background, sharp focus, No we
     const session = loadPersistedSession()
 
     expect(session?.devSettings?.tripoPbr).toBe(false)
+  })
+
+  it('preserves persisted viewer look overrides', () => {
+    window.localStorage.setItem(
+      'ww-character-session-v1',
+      JSON.stringify({
+        devSettings: {
+          viewerLook: {
+            toneMapping: 'aces',
+            exposure: 1.35,
+            roughnessMultiplier: 0.72,
+            contrast: 1.2,
+            vibrance: 0.3,
+            sharpen: 0.4,
+          },
+        },
+      }),
+    )
+
+    const session = loadPersistedSession()
+
+    expect(session?.devSettings?.viewerLook?.toneMapping).toBe('aces')
+    expect(session?.devSettings?.viewerLook?.exposure).toBe(1.35)
+    expect(session?.devSettings?.viewerLook?.roughnessMultiplier).toBe(0.72)
+    expect(session?.devSettings?.viewerLook?.contrast).toBe(1.2)
+    expect(session?.devSettings?.viewerLook?.vibrance).toBe(0.3)
+    expect(session?.devSettings?.viewerLook?.sharpen).toBe(0.4)
   })
 
   it('preserves bundled multi-animation clip metadata in persisted tripo outputs', () => {

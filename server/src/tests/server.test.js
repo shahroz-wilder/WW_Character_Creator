@@ -1387,7 +1387,7 @@ describe('tripoService', () => {
     )
   })
 
-  it('accepts preset:biped:look_around for explicit retarget tasks', async () => {
+  it('accepts preset:biped:standing_relax for explicit retarget tasks', async () => {
     const createAnimationTask = vi.fn().mockResolvedValue('anim-task-look-around-1')
     const tripoService = createTripoService({
       tripoClient: {
@@ -1425,12 +1425,12 @@ describe('tripoService', () => {
     })
 
     const result = await tripoService.createRetargetTask('rig-task-look-around-1', {
-      animationName: 'preset:biped:look_around',
+      animationName: 'preset:biped:standing_relax',
     })
 
     expect(createAnimationTask).toHaveBeenCalledWith({
       originalModelTaskId: 'rig-task-look-around-1',
-      animation: 'preset:biped:look_around',
+      animation: 'preset:biped:standing_relax',
       taskType: 'animate_retarget',
       animateInPlace: false,
     })

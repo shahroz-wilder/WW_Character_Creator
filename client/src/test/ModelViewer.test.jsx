@@ -130,6 +130,8 @@ describe('ModelViewer', () => {
         LoopRepeat: 'LoopRepeat',
         SRGBColorSpace: 'srgb',
         NoToneMapping: 'none',
+        ACESFilmicToneMapping: 'aces',
+        ReinhardToneMapping: 'reinhard',
       }
     })
 
@@ -147,6 +149,32 @@ describe('ModelViewer', () => {
         update = vi.fn()
         reset = controlsReset
         dispose = controlsDispose
+      },
+    }))
+
+    vi.doMock('three/examples/jsm/postprocessing/EffectComposer.js', () => ({
+      EffectComposer: class {
+        addPass = vi.fn()
+        setPixelRatio = vi.fn()
+        setSize = vi.fn()
+        render = vi.fn()
+        dispose = vi.fn()
+      },
+    }))
+
+    vi.doMock('three/examples/jsm/postprocessing/RenderPass.js', () => ({
+      RenderPass: class {
+        constructor(_scene, camera) {
+          this.camera = camera
+        }
+      },
+    }))
+
+    vi.doMock('three/examples/jsm/postprocessing/ShaderPass.js', () => ({
+      ShaderPass: class {
+        constructor(shader) {
+          this.uniforms = shader.uniforms
+        }
       },
     }))
 
