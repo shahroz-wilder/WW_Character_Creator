@@ -1387,6 +1387,62 @@ describe('tripoService', () => {
     )
   })
 
+  it('accepts preset:biped:standing_relax for explicit retarget tasks', async () => {
+    const createAnimationTask = vi.fn().mockResolvedValue('anim-task-look-around-1')
+    const tripoService = createTripoService({
+      tripoClient: {
+        uploadImageBuffer: vi.fn(),
+        createMultiviewTask: vi.fn(),
+        createImageTask: vi.fn(),
+        createRigTask: vi.fn(),
+        createAnimationTask,
+        getTask: vi
+          .fn()
+          .mockResolvedValueOnce({
+            task_id: 'rig-task-look-around-1',
+            type: 'animate_rig',
+            status: 'success',
+            progress: 100,
+            output: {
+              rigged_model: 'https://example.com/rigged-look-around.glb',
+            },
+          })
+          .mockResolvedValueOnce({
+            task_id: 'anim-task-look-around-1',
+            type: 'animate_retarget',
+            status: 'queued',
+            progress: 0,
+            output: {},
+          }),
+        fetchRemoteAsset: vi.fn(),
+      },
+      config: {
+        ...TEST_CONFIG,
+        tripoIdleAnimationTaskType: 'animate_retarget',
+        tripoIdleAnimationName: 'preset:biped:wait',
+        tripoIdleAnimationInPlace: false,
+      },
+    })
+
+    const result = await tripoService.createRetargetTask('rig-task-look-around-1', {
+      animationName: 'preset:biped:standing_relax',
+    })
+
+    expect(createAnimationTask).toHaveBeenCalledWith({
+      originalModelTaskId: 'rig-task-look-around-1',
+      animation: 'preset:biped:standing_relax',
+      taskType: 'animate_retarget',
+      animateInPlace: false,
+    })
+    expect(result).toEqual(
+      expect.objectContaining({
+        taskId: 'anim-task-look-around-1',
+        taskType: 'animate_retarget',
+        sourceTaskId: 'rig-task-look-around-1',
+      }),
+    )
+  })
+
   it('treats animate_retarget task summaries as animation tasks even without cached links', async () => {
     const createRigTask = vi.fn()
     const createAnimationTask = vi.fn()

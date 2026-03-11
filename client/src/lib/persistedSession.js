@@ -1,4 +1,5 @@
 import { DEFAULT_MULTIVIEW_PROMPT } from '../constants/prompts'
+import { DEFAULT_VIEWER_LOOK_SETTINGS, normalizeViewerLookSettings } from './viewerLook'
 
 const STORAGE_KEY = 'ww-character-session-v1'
 const DATABASE_NAME = 'ww-character-session-db'
@@ -45,11 +46,16 @@ const LEGACY_ANIMATION_KEY_BY_PRESET = Object.freeze({
   idle: 'idle',
   walk: 'walk',
   run: 'run',
+  look_around: 'look_around',
   slash: 'slash',
   'preset:idle': 'idle',
   'preset:biped:wait': 'idle',
   'preset:walk': 'walk',
   'preset:run': 'run',
+  'preset:look_around': 'look_around',
+  'preset:standing_relax': 'look_around',
+  'preset:biped:look_around': 'look_around',
+  'preset:biped:standing_relax': 'look_around',
   'preset:slash': 'slash',
   'preset:biped:idle': 'idle',
   'preset:biped:walk': 'walk',
@@ -346,6 +352,10 @@ const normalizeDevSettings = (devSettings) => ({
   tripoTextureQuality: devSettings?.tripoTextureQuality === 'detailed' ? 'detailed' : 'standard',
   tripoFaceLimit: String(devSettings?.tripoFaceLimit ?? '').trim(),
   defaultSpritesEnabled: Boolean(devSettings?.defaultSpritesEnabled),
+  viewerLook: normalizeViewerLookSettings(
+    devSettings?.viewerLook,
+    DEFAULT_VIEWER_LOOK_SETTINGS,
+  ),
 })
 
 const openDatabase = () => {

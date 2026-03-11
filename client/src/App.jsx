@@ -31,6 +31,12 @@ import {
   loadPersistedRichSession,
   savePersistedSession,
 } from './lib/persistedSession'
+import { DEFAULT_ANIMATED_SPRITE_DELAY_MS, resolveAnimatedSpriteDelayMs } from './lib/spriteTiming'
+import {
+  DEFAULT_VIEWER_LOOK_SETTINGS,
+  VIEWER_TONE_MAPPING_LABELS,
+  normalizeViewerLookSettings,
+} from './lib/viewerLook'
 
 const EMPTY_JOB = {
   taskId: '',
@@ -60,7 +66,7 @@ const DEFAULT_RETARGET_ANIMATION_INPUT = 'preset:biped:walk preset:biped:run'
 const AUTO_STEP03_MESH_QUALITY = 'detailed'
 const AUTO_STEP03_TEXTURE_QUALITY = 'detailed'
 const AUTO_STEP03_FACE_LIMIT = 64000
-const AUTO_PIPELINE_POLL_TIMEOUT_MS = 300000
+const AUTO_PIPELINE_POLL_TIMEOUT_MS = 600000
 
 const DEV_PRESETS = {
   portraitAspectRatio: '1:1',
@@ -76,6 +82,7 @@ const DEV_PRESETS = {
   tripoTextureQuality: 'standard',
   tripoFaceLimit: '',
   defaultSpritesEnabled: false,
+  viewerLook: DEFAULT_VIEWER_LOOK_SETTINGS,
 }
 
 const MULTIVIEW_ORDER = ['front', 'back', 'left', 'right']
@@ -116,9 +123,15 @@ const DEFAULT_SPRITE_FILES = {
 }
 const STEP03_PREVIEW_OPTIONS = Object.freeze([
   { key: 'apose', label: 'A-pose', preset: '', isAnimated: false },
-  { key: 'idle', label: 'Idle', preset: 'preset:biped:wait', isAnimated: true },
+  { key: 'idle', label: 'Wait', preset: 'preset:biped:wait', isAnimated: true },
   { key: 'walk', label: 'Walk', preset: 'preset:walk', isAnimated: true },
   { key: 'run', label: 'Run', preset: 'preset:run', isAnimated: true },
+  {
+    key: 'look_around',
+    label: 'Idle',
+    preset: 'preset:biped:standing_relax',
+    isAnimated: true,
+  },
   { key: 'slash', label: 'Slash', preset: 'preset:slash', isAnimated: true },
 ])
 const ANIMATION_PREVIEW_OPTIONS = Object.freeze(
@@ -143,6 +156,7 @@ const ANIMATION_PRESET_BY_KEY = Object.freeze(
 const ANIMATION_LABEL_BY_KEY = Object.freeze(
   Object.fromEntries(ANIMATION_PREVIEW_OPTIONS.map((option) => [option.key, option.label])),
 )
+const SPRITE_PREVIEW_KEY_ORDER = Object.freeze(['walk', 'run', 'idle', 'look_around', 'slash'])
 const ANIMATION_KEY_BY_PRESET = Object.freeze(
   ANIMATION_PREVIEW_OPTIONS.reduce((lookup, option) => {
     lookup[option.key] = option.key
@@ -152,10 +166,15 @@ const ANIMATION_KEY_BY_PRESET = Object.freeze(
       lookup['preset:idle'] = option.key
       lookup['preset:biped:idle'] = option.key
     }
+    if (option.key === 'look_around') {
+      lookup['preset:look_around'] = option.key
+      lookup['preset:standing_relax'] = option.key
+      lookup['preset:biped:standing_relax'] = option.key
+    }
     return lookup
   }, {}),
 )
-const DEFAULT_SPRITE_PREVIEW_KEY = SPRITE_360_PREVIEW_KEY
+const DEFAULT_SPRITE_PREVIEW_KEY = 'walk'
 const LEGACY_ANIMATED_PREVIEW_KEY = 'walk'
 const DEFAULT_PROGRESS_BOUNDARIES = Object.freeze([0.2, 0.34, 0.8, 1])
 const PIPELINE_POLL_INTERVAL_MS = 3000
@@ -552,6 +571,29 @@ const buildAnimationPreviewOptions = (animationKeys = []) =>
     .map((animationKey) => ANIMATION_PREVIEW_OPTION_BY_KEY[animationKey] || null)
     .filter(Boolean)
 
+const sortSpritePreviewAnimationKeys = (animationKeys = []) => {
+  const uniqueKeys = Array.from(new Set(Array.isArray(animationKeys) ? animationKeys : []))
+  const orderLookup = new Map(SPRITE_PREVIEW_KEY_ORDER.map((key, index) => [key, index]))
+
+  return uniqueKeys
+    .map((key, index) => ({ key, index }))
+    .sort((left, right) => {
+      const leftOrder = orderLookup.has(left.key)
+        ? orderLookup.get(left.key)
+        : SPRITE_PREVIEW_KEY_ORDER.length + left.index
+      const rightOrder = orderLookup.has(right.key)
+        ? orderLookup.get(right.key)
+        : SPRITE_PREVIEW_KEY_ORDER.length + right.index
+
+      if (leftOrder !== rightOrder) {
+        return leftOrder - rightOrder
+      }
+
+      return left.index - right.index
+    })
+    .map((entry) => entry.key)
+}
+
 const normalizeAnimationPreviewKey = (value, fallback = 'apose') => {
   const normalizedValue = String(value || '').trim().toLowerCase()
   if (normalizedValue === 'apose') {
@@ -819,13 +861,15 @@ const getExpectedSpriteAnimationKeys = (spritePayload, fallbackAnimationKeys = [
 }
 
 const getAvailableSpriteAnimationKeys = (spritePayload, fallbackAnimationKeys = []) =>
-  getExpectedSpriteAnimationKeys(spritePayload, fallbackAnimationKeys).filter((animationKey) =>
-    hasRequiredSpriteDirections(resolveSpriteAnimationDirections(spritePayload, animationKey)),
+  sortSpritePreviewAnimationKeys(
+    getExpectedSpriteAnimationKeys(spritePayload, fallbackAnimationKeys).filter((animationKey) =>
+      hasRequiredSpriteDirections(resolveSpriteAnimationDirections(spritePayload, animationKey)),
+    ),
   )
 
 const getAvailableSpritePreviewKeys = (spritePayload, fallbackAnimationKeys = []) => [
-  ...(hasSharedSpritePreview(spritePayload) ? [SPRITE_360_PREVIEW_KEY] : []),
   ...getAvailableSpriteAnimationKeys(spritePayload, fallbackAnimationKeys),
+  ...(hasSharedSpritePreview(spritePayload) ? [SPRITE_360_PREVIEW_KEY] : []),
 ]
 
 const hasRequiredSpriteBundle = (spritePayload, fallbackAnimationKeys = []) => {
@@ -1064,7 +1108,7 @@ const MODEL_OUTPUT_VARIANT_ORDER = [
 ]
 
 const ANIMATED_MODEL_VARIANT_PRIORITY = ['animation_model', 'animated_model']
-const APOSE_MODEL_VARIANT_PRIORITY = ['rigged_model', 'model', 'pbr_model', 'base_model']
+const APOSE_PREVIEW_MODEL_VARIANT_PRIORITY = ['model', 'pbr_model', 'base_model', 'rigged_model']
 
 const MODEL_OUTPUT_VARIANT_LABELS = {
   animation_model: 'Animated',
@@ -1092,6 +1136,57 @@ const normalizeSpriteSize = (value) => {
 const normalizeAnimationMode = (value) => {
   const normalizedValue = String(value || '').trim().toLowerCase()
   return normalizedValue === 'animated' || normalizedValue === 'static' ? normalizedValue : ''
+}
+
+const buildTripoModelProxyUrl = ({ taskId, variant, animationMode = '', animationKey = '' }) => {
+  const normalizedTaskId = String(taskId || '').trim()
+  const normalizedVariant = String(variant || '').trim()
+  if (!normalizedTaskId || !normalizedVariant) {
+    return ''
+  }
+
+  const params = [`variant=${encodeURIComponent(normalizedVariant)}`]
+  const normalizedAnimationMode = normalizeAnimationMode(animationMode)
+  if (normalizedAnimationMode) {
+    params.push(`animationMode=${encodeURIComponent(normalizedAnimationMode)}`)
+  }
+
+  const normalizedAnimationKey = String(animationKey || '').trim()
+  if (normalizedAnimationKey) {
+    params.push(`animationKey=${encodeURIComponent(normalizedAnimationKey)}`)
+  }
+
+  return `/api/tripo/tasks/${encodeURIComponent(normalizedTaskId)}/model?${params.join('&')}`
+}
+
+const resolveAposeSourceModelUrl = ({
+  variantCatalog,
+  modelTaskId = '',
+  rigTaskId = '',
+  priority = APOSE_PREVIEW_MODEL_VARIANT_PRIORITY,
+}) => {
+  const selectedVariant = findFirstAvailableVariant(variantCatalog, priority)
+  const preferredBaseVariant = ['model', 'pbr_model', 'base_model'].includes(selectedVariant)
+    ? selectedVariant
+    : 'model'
+
+  if (modelTaskId) {
+    return buildTripoModelProxyUrl({
+      taskId: modelTaskId,
+      variant: preferredBaseVariant,
+      animationMode: 'static',
+    })
+  }
+
+  if (selectedVariant === 'rigged_model' && rigTaskId) {
+    return buildTripoModelProxyUrl({
+      taskId: rigTaskId,
+      variant: 'rigged_model',
+      animationMode: 'static',
+    })
+  }
+
+  return selectedVariant ? variantCatalog?.[selectedVariant] || '' : ''
 }
 
 const normalizeTripoPbr = (value, fallback = DEV_PRESETS.tripoPbr) => {
@@ -1128,6 +1223,12 @@ const normalizeTripoFaceLimitInput = (value, fallback = DEV_PRESETS.tripoFaceLim
 
   return String(Math.floor(parsedValue))
 }
+
+const formatSliderValue = (value, digits = 2) =>
+  Number(value)
+    .toFixed(digits)
+    .replace(/\.0+$/, '')
+    .replace(/(\.\d*?)0+$/, '$1')
 
 const parseTripoFaceLimit = (value) => {
   const trimmedValue = String(value ?? '').trim()
@@ -1175,6 +1276,10 @@ function App() {
       typeof initialSession?.devSettings?.defaultSpritesEnabled === 'boolean'
         ? initialSession.devSettings.defaultSpritesEnabled
         : DEV_PRESETS.defaultSpritesEnabled,
+    viewerLook: normalizeViewerLookSettings(
+      initialSession?.devSettings?.viewerLook,
+      DEV_PRESETS.viewerLook,
+    ),
   }))
   const [portraitResult, setPortraitResult] = useState(() => initialSession?.portraitResult || null)
   const [multiviewPrompt, setMultiviewPrompt] = useState(
@@ -1274,16 +1379,17 @@ function App() {
     spriteResult,
     fallbackSpriteAnimationKeys,
   )
+  const sortedStep04AnimationPreviewKeys = sortSpritePreviewAnimationKeys(
+    step04AnimationPreviewKeys.length > 0
+      ? step04AnimationPreviewKeys
+      : fallbackSpriteAnimationKeys,
+  )
   const step04PreviewOptions = [
+    ...buildAnimationPreviewOptions(sortedStep04AnimationPreviewKeys),
     SPRITE_360_PREVIEW_OPTION,
-    ...buildAnimationPreviewOptions(
-      step04AnimationPreviewKeys.length > 0
-        ? step04AnimationPreviewKeys
-        : fallbackSpriteAnimationKeys,
-    ),
   ]
   const requiredSpriteAnimationKeys =
-    step04AnimationPreviewKeys.length > 0 ? step04AnimationPreviewKeys : fallbackSpriteAnimationKeys
+    sortedStep04AnimationPreviewKeys
   const hasModelViewPack = MODEL_VIEW_CAPTURE_ORDER.some((view) => Boolean(modelViewPack?.[view.key]?.dataUrl))
   const availableModelVariants = MODEL_OUTPUT_VARIANT_ORDER.filter((variant) =>
     Boolean(modelOutputVariants?.[variant]),
@@ -1303,13 +1409,22 @@ function App() {
       resolvedAnimatedVariants?.[resolvedAnimatedOutput.variant]
       ? resolvedAnimatedOutput.variant
       : '') || findFirstAvailableVariant(resolvedAnimatedVariants, ANIMATED_MODEL_VARIANT_PRIORITY)
-  const aposeModelVariant = findFirstAvailableVariant(modelOutputVariants, APOSE_MODEL_VARIANT_PRIORITY)
-  const requestedModelVariant = modelPreviewMode === 'apose' ? aposeModelVariant : animatedModelVariant
+  const aposePreviewModelVariant = findFirstAvailableVariant(
+    modelOutputVariants,
+    APOSE_PREVIEW_MODEL_VARIANT_PRIORITY,
+  )
+  const aposePreviewModelUrl = resolveAposeSourceModelUrl({
+    variantCatalog: modelOutputVariants,
+    modelTaskId: step03TaskState.modelTaskId,
+    rigTaskId: step03TaskState.rigTaskId,
+    priority: APOSE_PREVIEW_MODEL_VARIANT_PRIORITY,
+  })
+  const requestedModelVariant =
+    modelPreviewMode === 'apose' ? aposePreviewModelVariant : animatedModelVariant
   const fallbackModelVariant =
     modelPreviewMode === 'apose'
-      ? animatedModelVariant ||
-        findFirstAvailableVariant(modelOutputVariants, ANIMATED_MODEL_VARIANT_PRIORITY)
-      : aposeModelVariant
+      ? ''
+      : aposePreviewModelVariant
   const resolvedModelVariant =
     requestedModelVariant ||
     fallbackModelVariant ||
@@ -1335,16 +1450,14 @@ function App() {
   })
   const activeModelUrl =
     modelPreviewMode === 'apose'
-      ? (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) || tripoJob.outputs?.modelUrl || ''
+      ? aposePreviewModelUrl
       : resolvedAnimatedOutput?.modelUrl ||
         (animatedModelVariant && resolvedAnimatedVariants?.[animatedModelVariant]) ||
         (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
         (resolvedAnimatedPreviewKey === legacyAnimatedPreviewKey ? tripoJob.outputs?.modelUrl || '' : '')
   const activeDownloadUrl =
     modelPreviewMode === 'apose'
-      ? (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
-        tripoJob.outputs?.downloadUrl ||
-        ''
+      ? aposePreviewModelUrl
       : resolvedAnimatedOutput?.downloadUrl ||
         (animatedModelVariant && resolvedAnimatedVariants?.[animatedModelVariant]) ||
         (resolvedModelVariant && modelOutputVariants?.[resolvedModelVariant]) ||
@@ -1658,6 +1771,10 @@ function App() {
             typeof session.devSettings?.defaultSpritesEnabled === 'boolean'
               ? session.devSettings.defaultSpritesEnabled
               : currentDevSettings.defaultSpritesEnabled,
+          viewerLook: normalizeViewerLookSettings(
+            session.devSettings?.viewerLook,
+            currentDevSettings.viewerLook,
+          ),
         }))
         setPortraitResult((currentPortraitResult) =>
           session.portraitResult?.imageDataUrl ? session.portraitResult : currentPortraitResult,
@@ -1759,7 +1876,7 @@ function App() {
         },
       }
     })
-  }, [hasStep04Output])
+  }, [hasStep04Output, pipelineState.unlocked.step4, spriteResult])
 
   useEffect(() => {
     setModelViewPack(null)
@@ -2123,37 +2240,45 @@ function App() {
     }
   }, [])
 
-  const buildViewerAnimationDirections = useCallback(async (capturedDirections, captureSize) => {
-    const resizedEntries = await Promise.all(
-      MODEL_VIEW_CAPTURE_ORDER.map(async (view) => {
-        const directionCapture = capturedDirections?.[view.key]
-        if (!directionCapture?.frameDataUrls?.length) {
-          return [view.key, null]
-        }
+  const buildViewerAnimationDirections = useCallback(
+    async (capturedDirections, captureSize, animationKey = '') => {
+      const resolvedDelayMs = DEFAULT_ANIMATED_SPRITE_DELAY_MS
+      const resizedEntries = await Promise.all(
+        MODEL_VIEW_CAPTURE_ORDER.map(async (view) => {
+          const directionCapture = capturedDirections?.[view.key]
+          if (!directionCapture?.frameDataUrls?.length) {
+            return [view.key, null]
+          }
 
-        const resizedFrames = await resizeFrameSequenceForModelView(
-          directionCapture.frameDataUrls,
-          captureSize,
-        )
+          const resizedFrames = await resizeFrameSequenceForModelView(
+            directionCapture.frameDataUrls,
+            captureSize,
+          )
 
-        return [
-          view.key,
-          {
-            previewDataUrl: resizedFrames[0] || '',
-            frameDataUrls: resizedFrames,
-            delayMs: directionCapture.delayMs,
-            source: 'viewer-animation-capture',
-            frames: {
-              count: resizedFrames.length,
-              format: 'base64-frame-sequence',
+          return [
+            view.key,
+            {
+              previewDataUrl: resizedFrames[0] || '',
+              frameDataUrls: resizedFrames,
+              delayMs: resolveAnimatedSpriteDelayMs(
+                directionCapture.delayMs,
+                resolvedDelayMs,
+                animationKey,
+              ),
+              source: 'viewer-animation-capture',
+              frames: {
+                count: resizedFrames.length,
+                format: 'base64-frame-sequence',
+              },
             },
-          },
-        ]
-      }),
-    )
+          ]
+        }),
+      )
 
-    return Object.fromEntries(resizedEntries.filter((entry) => Boolean(entry[1])))
-  }, [])
+      return Object.fromEntries(resizedEntries.filter((entry) => Boolean(entry[1])))
+    },
+    [],
+  )
 
   const buildViewerSnapshotDirections = useCallback(async (captures, captureSize) => {
     const resizedEntries = await Promise.all(
@@ -2188,13 +2313,15 @@ function App() {
 
       while (Date.now() - startedAt < timeoutMs) {
         const captureApi = viewerCaptureApiRef.current
+        const hasExpectedModelUrl =
+          !expectedModelUrl || captureApi?.getCurrentModelUrl?.() === expectedModelUrl
         const currentAnimationSelectionKey = captureApi?.getCurrentAnimationSelection?.()
         const hasExpectedAnimationSelection =
           !expectedAnimationSelectionKey ||
           typeof captureApi?.getCurrentAnimationSelection !== 'function' ||
           currentAnimationSelectionKey === expectedAnimationSelectionKey
 
-        if (captureApi?.getCurrentModelUrl?.() === expectedModelUrl && hasExpectedAnimationSelection) {
+        if (hasExpectedModelUrl && hasExpectedAnimationSelection) {
           if (typeof captureApi.waitUntilReady === 'function') {
             await captureApi.waitUntilReady({
               timeoutMs: Math.max(1000, timeoutMs - (Date.now() - startedAt)),
@@ -2485,7 +2612,11 @@ function App() {
 
     try {
       const capturedDirections = await captureApi.captureAnimatedSpriteDirections()
-      const nextDirections = await buildViewerAnimationDirections(capturedDirections, captureSize)
+      const nextDirections = await buildViewerAnimationDirections(
+        capturedDirections,
+        captureSize,
+        animationKey,
+      )
 
       setDevSettings((currentValue) => ({
         ...currentValue,
@@ -2619,6 +2750,7 @@ function App() {
     {
       animationMode = '',
       requestedAnimations = [],
+      acceptSuccessWithoutExpectedOutput = false,
       timeoutMs = AUTO_PIPELINE_POLL_TIMEOUT_MS,
       timeoutMessage = 'Timed out waiting for the 3D task to finish.',
     } = {},
@@ -2647,7 +2779,8 @@ function App() {
 
       if (
         normalizedStatus === 'success' &&
-        hasExpectedTaskOutput(normalizedJob, normalizedRequestedAnimations)
+        (acceptSuccessWithoutExpectedOutput ||
+          hasExpectedTaskOutput(normalizedJob, normalizedRequestedAnimations))
       ) {
         return normalizedJob
       }
@@ -2800,7 +2933,7 @@ function App() {
 
   const runStep04Generation = async ({
     animatedJob = tripoJob,
-    aposeCaptureModelUrl = (aposeModelVariant && modelOutputVariants?.[aposeModelVariant]) || '',
+    aposeCaptureModelUrl = aposePreviewModelUrl,
     animationKeys = expectedAnimationOutputKeys,
     primaryAnimationKey = configuredAnimationPreviewKey,
   } = {}) => {
@@ -2835,7 +2968,7 @@ function App() {
         setModelPreviewMode('apose')
       })
       await sleep(0)
-      const aposeCaptureApi = await waitForViewerModel(aposeCaptureModelUrl, 'apose')
+      const aposeCaptureApi = await waitForViewerModel('', 'apose')
       if (!aposeCaptureApi?.captureEightViews) {
         throw new Error('3D viewer is not ready for A-pose 360 capture yet.')
       }
@@ -2867,7 +3000,11 @@ function App() {
         }
 
         const capturedDirections = await captureApi.captureAnimatedSpriteDirections()
-        const directionBundle = await buildViewerAnimationDirections(capturedDirections, captureSize)
+        const directionBundle = await buildViewerAnimationDirections(
+          capturedDirections,
+          captureSize,
+          animationKey,
+        )
         nextAnimations[animationKey] = {
           animation: animationKey,
           label: ANIMATION_LABEL_BY_KEY[animationKey] || animationKey,
@@ -3004,6 +3141,7 @@ function App() {
 
       const rigJob = await waitForTripoTaskCompletion(rigStart.taskId, {
         animationMode: 'static',
+        acceptSuccessWithoutExpectedOutput: true,
         timeoutMessage: 'Timed out while rigging the 3D model.',
       })
 
@@ -3029,18 +3167,16 @@ function App() {
         })
       })
 
-      const animatedVariants = animatedJob?.outputs?.variants || null
-      const animatedAposeVariant = findFirstAvailableVariant(
-        animatedVariants,
-        APOSE_MODEL_VARIANT_PRIORITY,
-      )
       const rigVariants = rigJob?.outputs?.variants || null
-      const rigAposeVariant = findFirstAvailableVariant(rigVariants, APOSE_MODEL_VARIANT_PRIORITY)
-      const rigAposeCaptureModelUrl =
-        (animatedAposeVariant && animatedVariants?.[animatedAposeVariant]) ||
-        (rigAposeVariant && rigVariants?.[rigAposeVariant]) ||
-        rigJob?.outputs?.modelUrl ||
-        ''
+      const rigAposeCaptureModelUrl = resolveAposeSourceModelUrl({
+        variantCatalog: {
+          ...(rigVariants || {}),
+          ...(animatedJob?.outputs?.variants || {}),
+        },
+        modelTaskId: step03TaskState.modelTaskId,
+        rigTaskId: rigJob?.taskId || step03TaskState.rigTaskId,
+        priority: APOSE_PREVIEW_MODEL_VARIANT_PRIORITY,
+      })
       const autoAnimationKeys = getExpectedAnimationOutputKeys(animatedJob, requestedAnimations)
 
       await sleep(0)
@@ -3442,6 +3578,7 @@ function App() {
         tripoTextureQuality: DEV_PRESETS.tripoTextureQuality,
         tripoFaceLimit: DEV_PRESETS.tripoFaceLimit,
         defaultSpritesEnabled: DEV_PRESETS.defaultSpritesEnabled,
+        viewerLook: DEV_PRESETS.viewerLook,
       })
       setIsResettingSession(false)
     }
@@ -3817,6 +3954,7 @@ function App() {
                       animationSelectionKey={activeViewerAnimationSelectionKey}
                       animationClipIndex={activeViewerAnimationClipIndex}
                       resetSignal={viewerResetSignal}
+                      lookSettings={devSettings.viewerLook}
                       onCaptureApiReady={handleViewerCaptureApiReady}
                     />
                   </Suspense>
@@ -4062,6 +4200,259 @@ function App() {
                 <option value="false">False</option>
               </select>
             </label>
+            <div className="dev-panel__field">
+              <span>Look</span>
+              <div className="dev-panel__status">
+                <strong>Viewport and Capture</strong>
+                <p>These controls affect the 3D viewport and Step 04 sprite capture.</p>
+              </div>
+            </div>
+            <label className="dev-panel__field">
+              <span>Tone Mapping ({VIEWER_TONE_MAPPING_LABELS[devSettings.viewerLook.toneMapping]})</span>
+              <select
+                value={devSettings.viewerLook.toneMapping}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        toneMapping: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              >
+                {Object.entries(VIEWER_TONE_MAPPING_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="dev-panel__field">
+              <span>Exposure ({formatSliderValue(devSettings.viewerLook.exposure)})</span>
+              <input
+                type="range"
+                min="0"
+                max="3"
+                step="0.01"
+                value={String(devSettings.viewerLook.exposure)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        exposure: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Environment ({formatSliderValue(devSettings.viewerLook.environmentIntensity)})</span>
+              <input
+                type="range"
+                min="0"
+                max="3"
+                step="0.01"
+                value={String(devSettings.viewerLook.environmentIntensity)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        environmentIntensity: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Key Light ({formatSliderValue(devSettings.viewerLook.keyLightIntensity)})</span>
+              <input
+                type="range"
+                min="0"
+                max="4"
+                step="0.01"
+                value={String(devSettings.viewerLook.keyLightIntensity)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        keyLightIntensity: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Fill Light ({formatSliderValue(devSettings.viewerLook.fillLightIntensity)})</span>
+              <input
+                type="range"
+                min="0"
+                max="4"
+                step="0.01"
+                value={String(devSettings.viewerLook.fillLightIntensity)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        fillLightIntensity: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Rim Light ({formatSliderValue(devSettings.viewerLook.rimLightIntensity)})</span>
+              <input
+                type="range"
+                min="0"
+                max="4"
+                step="0.01"
+                value={String(devSettings.viewerLook.rimLightIntensity)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        rimLightIntensity: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Ambient ({formatSliderValue(devSettings.viewerLook.ambientLightIntensity)})</span>
+              <input
+                type="range"
+                min="0"
+                max="4"
+                step="0.01"
+                value={String(devSettings.viewerLook.ambientLightIntensity)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        ambientLightIntensity: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>
+                Material Roughness ({formatSliderValue(devSettings.viewerLook.roughnessMultiplier)})
+              </span>
+              <input
+                type="range"
+                min="0"
+                max="5"
+                step="0.01"
+                value={String(devSettings.viewerLook.roughnessMultiplier)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        roughnessMultiplier: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Contrast ({formatSliderValue(devSettings.viewerLook.contrast)})</span>
+              <input
+                type="range"
+                min="0.5"
+                max="2"
+                step="0.01"
+                value={String(devSettings.viewerLook.contrast)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        contrast: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Vibrance ({formatSliderValue(devSettings.viewerLook.vibrance)})</span>
+              <input
+                type="range"
+                min="-1"
+                max="1"
+                step="0.01"
+                value={String(devSettings.viewerLook.vibrance)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        vibrance: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
+            <label className="dev-panel__field">
+              <span>Sharpen ({formatSliderValue(devSettings.viewerLook.sharpen)})</span>
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="0.01"
+                value={String(devSettings.viewerLook.sharpen)}
+                onChange={(event) =>
+                  setDevSettings((currentValue) => ({
+                    ...currentValue,
+                    viewerLook: normalizeViewerLookSettings(
+                      {
+                        ...currentValue.viewerLook,
+                        sharpen: event.target.value,
+                      },
+                      currentValue.viewerLook,
+                    ),
+                  }))
+                }
+              />
+            </label>
             <label className="dev-panel__field">
               <span>Retarget Animations</span>
               <input
@@ -4264,7 +4655,7 @@ function App() {
                     : 'Unavailable'}
                 </p>
                 <p>Animated file: {animatedModelVariant ? 'available' : 'unavailable'}</p>
-                <p>A-pose file: {aposeModelVariant ? 'available' : 'unavailable'}</p>
+                <p>A-pose file: {aposePreviewModelVariant ? 'available' : 'unavailable'}</p>
                 {isPreviewModeUnavailable ? (
                   <p>Requested pose is unavailable for this task. Showing fallback preview.</p>
                 ) : null}
