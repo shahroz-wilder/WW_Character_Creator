@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { retargetClip } from 'three/examples/jsm/utils/SkeletonUtils.js'
+import {
+  DEFAULT_ANIMATED_SPRITE_DELAY_MS,
+  resolveAnimatedSpriteCaptureDelayMs,
+} from '../lib/spriteTiming'
+import { DEFAULT_VIEWER_LOOK_SETTINGS, normalizeViewerLookSettings } from '../lib/viewerLook'
 
 const VIEW_CAPTURE_PRESETS = [
   { key: 'front', label: 'Front', yawDeg: 0 },
@@ -17,10 +25,122 @@ const VIEW_CAPTURE_PRESETS = [
   { key: 'front_left', label: 'Front_Left', yawDeg: 45 },
 ]
 
-const ANIMATED_SPRITE_CAPTURE_FOV = 24
 const ANIMATED_SPRITE_CAPTURE_FRAME_COUNT = 16
-const ANIMATED_SPRITE_FRAME_DELAY_MS = 90
-const ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG = 35.264
+const ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG = 45
+const ORIGINAL_ROUGHNESS_USER_DATA_KEY = '__wwOriginalRoughness'
+const LOOK_ADJUST_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null },
+    resolution: { value: { x: 1, y: 1 } },
+    contrast: { value: DEFAULT_VIEWER_LOOK_SETTINGS.contrast },
+    vibrance: { value: DEFAULT_VIEWER_LOOK_SETTINGS.vibrance },
+    sharpen: { value: DEFAULT_VIEWER_LOOK_SETTINGS.sharpen },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform vec2 resolution;
+    uniform float contrast;
+    uniform float vibrance;
+    uniform float sharpen;
+    varying vec2 vUv;
+
+    vec3 applyVibrance(vec3 color, float amount) {
+      float average = (color.r + color.g + color.b) / 3.0;
+      float maxChannel = max(color.r, max(color.g, color.b));
+      float influence = (maxChannel - average) * (-amount * 3.0);
+      return mix(color, vec3(maxChannel), influence);
+    }
+
+    void main() {
+      vec2 texel = 1.0 / max(resolution, vec2(1.0));
+      vec4 baseSample = texture2D(tDiffuse, vUv);
+      vec3 color = baseSample.rgb;
+
+      if (sharpen > 0.001) {
+        vec3 north = texture2D(tDiffuse, vUv + vec2(0.0, texel.y)).rgb;
+        vec3 south = texture2D(tDiffuse, vUv - vec2(0.0, texel.y)).rgb;
+        vec3 east = texture2D(tDiffuse, vUv + vec2(texel.x, 0.0)).rgb;
+        vec3 west = texture2D(tDiffuse, vUv - vec2(texel.x, 0.0)).rgb;
+        color = color * (1.0 + 4.0 * sharpen) - (north + south + east + west) * sharpen;
+      }
+
+      color = (color - 0.5) * contrast + 0.5;
+      color = applyVibrance(color, vibrance);
+
+      gl_FragColor = vec4(clamp(color, 0.0, 1.0), baseSample.a);
+    }
+  `,
+}
+
+const resolveToneMapping = (value) => {
+  switch (String(value || '').trim().toLowerCase()) {
+    case 'aces':
+      return THREE.ACESFilmicToneMapping
+    case 'reinhard':
+      return THREE.ReinhardToneMapping
+    default:
+      return THREE.NoToneMapping
+  }
+}
+
+const collectRoughnessMaterials = (object) => {
+  const collectedMaterials = []
+  const seenMaterials = new Set()
+
+  object.traverse((child) => {
+    const candidateMaterials = Array.isArray(child.material) ? child.material : [child.material]
+
+    candidateMaterials.forEach((material) => {
+      if (!material || typeof material !== 'object' || seenMaterials.has(material)) {
+        return
+      }
+
+      if (!Number.isFinite(material.roughness)) {
+        return
+      }
+
+      if (!material.userData || typeof material.userData !== 'object') {
+        material.userData = {}
+      }
+
+      if (!Number.isFinite(material.userData[ORIGINAL_ROUGHNESS_USER_DATA_KEY])) {
+        material.userData[ORIGINAL_ROUGHNESS_USER_DATA_KEY] = material.roughness
+      }
+
+      seenMaterials.add(material)
+      collectedMaterials.push(material)
+    })
+  })
+
+  return collectedMaterials
+}
+
+const applyMaterialRoughnessMultiplier = (materials, roughnessMultiplier) => {
+  const resolvedMultiplier = Number.isFinite(Number(roughnessMultiplier))
+    ? Number(roughnessMultiplier)
+    : DEFAULT_VIEWER_LOOK_SETTINGS.roughnessMultiplier
+
+  materials.forEach((material) => {
+    const baseRoughness = Number.isFinite(material?.userData?.[ORIGINAL_ROUGHNESS_USER_DATA_KEY])
+      ? material.userData[ORIGINAL_ROUGHNESS_USER_DATA_KEY]
+      : material.roughness
+
+    if (!Number.isFinite(baseRoughness)) {
+      return
+    }
+
+    material.roughness = Math.min(1, Math.max(0, baseRoughness * resolvedMultiplier))
+    material.needsUpdate = true
+  })
+}
 
 const buildFloorGrid = (object) => {
   const box = new THREE.Box3().setFromObject(object)
@@ -138,6 +258,13 @@ const ANIMATION_CLIP_NAME_HINTS = Object.freeze({
   idle: ['idle', 'stand', 'rest'],
   walk: ['walk'],
   run: ['run', 'jog', 'sprint'],
+  look_around: [
+    'standing_relax',
+    'standing relax',
+    'look_around',
+    'lookaround',
+    'look around',
+  ],
   slash: ['slash', 'attack', 'swing'],
 })
 
@@ -183,27 +310,79 @@ const resolveRequestedAnimationClip = (
 
 const MARGIN_RATIO = 0.1
 
-const getCaptureFraming = (camera, object, { pitchDeg = 0 } = {}) => {
+const buildBoxCorners = (box) => [
+  new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+  new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+  new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+  new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+  new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+  new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+  new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+  new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+]
+
+const getCaptureOffsetDirection = (yawDeg = 0, pitchDeg = 0) => {
+  const pitchRad = THREE.MathUtils.degToRad(Math.max(Number(pitchDeg) || 0, 0))
+  const horizontalDirection = new THREE.Vector3(1, 0, 0).applyAxisAngle(
+    new THREE.Vector3(0, 1, 0),
+    THREE.MathUtils.degToRad(yawDeg),
+  )
+
+  return horizontalDirection
+    .multiplyScalar(Math.cos(pitchRad))
+    .add(new THREE.Vector3(0, 1, 0).multiplyScalar(Math.sin(pitchRad)))
+    .normalize()
+}
+
+const configureOrthographicCaptureCamera = (
+  camera,
+  object,
+  { yawDeg = 0, pitchDeg = 0, marginRatio = MARGIN_RATIO } = {},
+) => {
   const box = new THREE.Box3().setFromObject(object)
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())
-  const fitRatio = Math.max(1 - MARGIN_RATIO * 2, 0.2)
-  const pitchRad = THREE.MathUtils.degToRad(Math.max(Number(pitchDeg) || 0, 0))
-  const horizontalFootprint = Math.max(Math.hypot(size.x, size.z), size.x, size.z, 0.001)
-  const safeHeight = Math.max(size.y + horizontalFootprint * Math.sin(pitchRad), 0.001)
-  const verticalFovRad = THREE.MathUtils.degToRad(camera.fov)
-  const horizontalFovRad =
-    2 * Math.atan(Math.tan(verticalFovRad / 2) * Math.max(camera.aspect, 0.001))
+  const fitRatio = Math.max(1 - marginRatio * 2, 0.2)
+  const aspect = Math.max(Number(camera.aspect) || 0, 0.001)
+  const captureDistance = Math.max(size.length() * 2.2, 4)
+  const captureDirection = getCaptureOffsetDirection(yawDeg, pitchDeg)
 
-  const distanceForHeight = (safeHeight / fitRatio) / (2 * Math.tan(verticalFovRad / 2))
-  const distanceForWidth = (horizontalFootprint / fitRatio) / (2 * Math.tan(horizontalFovRad / 2))
-  const orbitDistance = Math.max(distanceForHeight, distanceForWidth, 1.5)
+  camera.position.copy(center).addScaledVector(captureDirection, captureDistance)
+  camera.up.set(0, 1, 0)
+  camera.lookAt(center)
+  camera.updateMatrixWorld(true)
 
-  return {
-    center,
-    orbitDistance,
-    pitchRad,
+  const corners = buildBoxCorners(box)
+  let maxAbsX = 0
+  let maxAbsY = 0
+  let minDepth = Number.POSITIVE_INFINITY
+  let maxDepth = 0
+
+  for (const corner of corners) {
+    const cameraSpacePoint = corner.clone().applyMatrix4(camera.matrixWorldInverse)
+    const depth = -cameraSpacePoint.z
+    maxAbsX = Math.max(maxAbsX, Math.abs(cameraSpacePoint.x))
+    maxAbsY = Math.max(maxAbsY, Math.abs(cameraSpacePoint.y))
+    minDepth = Math.min(minDepth, depth)
+    maxDepth = Math.max(maxDepth, depth)
   }
+
+  const halfWidthNeeded = maxAbsX / fitRatio
+  const halfHeightNeeded = maxAbsY / fitRatio
+  const halfHeight = Math.max(halfHeightNeeded, halfWidthNeeded / aspect, 0.001)
+  const halfWidth = halfHeight * aspect
+  const depthPadding = Math.max(size.length() * 0.5, 1)
+
+  camera.left = -halfWidth
+  camera.right = halfWidth
+  camera.top = halfHeight
+  camera.bottom = -halfHeight
+  camera.near = Math.max(0.01, minDepth - depthPadding)
+  camera.far = Math.max(camera.near + 1, maxDepth + depthPadding)
+  camera.updateProjectionMatrix()
+  camera.updateMatrixWorld(true)
+
+  return center
 }
 
 export function ModelViewer({
@@ -211,11 +390,14 @@ export function ModelViewer({
   animationSelectionKey = 'apose',
   animationClipIndex = null,
   animationClipName = '',
+  lookSettings = DEFAULT_VIEWER_LOOK_SETTINGS,
   resetSignal = 0,
   onCaptureApiReady = null,
 }) {
   const containerRef = useRef(null)
   const controlsRef = useRef(null)
+  const lookRuntimeRef = useRef(null)
+  const latestLookSettingsRef = useRef(normalizeViewerLookSettings(lookSettings))
   const isCapturingSnapshotsRef = useRef(false)
   const [isLoading, setIsLoading] = useState(true)
   const [viewerError, setViewerError] = useState('')
@@ -231,6 +413,8 @@ export function ModelViewer({
 
     const scene = new THREE.Scene()
     scene.background = null
+    const resolvedLookSettings = normalizeViewerLookSettings(lookSettings)
+    latestLookSettingsRef.current = resolvedLookSettings
 
     const camera = new THREE.PerspectiveCamera(35, container.clientWidth / container.clientHeight, 0.01, 100)
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
@@ -240,27 +424,64 @@ export function ModelViewer({
       renderer.setClearColor(0x000000, 0)
     }
     renderer.outputColorSpace = THREE.SRGBColorSpace
-    renderer.toneMapping = THREE.ACESFilmicToneMapping
-    renderer.toneMappingExposure = 0.88
+    renderer.toneMapping = resolveToneMapping(resolvedLookSettings.toneMapping)
+    renderer.toneMappingExposure = resolvedLookSettings.exposure
     container.appendChild(renderer.domElement)
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer)
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
+    scene.environmentIntensity = resolvedLookSettings.environmentIntensity
 
-    const keyLight = new THREE.DirectionalLight('#fff3e5', 1.55)
+    // Keep the viewer close to the source renders instead of a stylized studio relight.
+    const keyLight = new THREE.DirectionalLight('#ffffff', resolvedLookSettings.keyLightIntensity)
     keyLight.position.set(2.7, 3.5, 5.4)
     scene.add(keyLight)
 
-    const fillLight = new THREE.DirectionalLight('#cdd9ff', 0.42)
+    const fillLight = new THREE.DirectionalLight('#ffffff', resolvedLookSettings.fillLightIntensity)
     fillLight.position.set(-3.4, 1.9, 2.6)
     scene.add(fillLight)
 
-    const rimLight = new THREE.DirectionalLight('#88c8b6', 0.7)
+    const rimLight = new THREE.DirectionalLight('#ffffff', resolvedLookSettings.rimLightIntensity)
     rimLight.position.set(-4.2, 2.1, -3.2)
     scene.add(rimLight)
 
-    const ambientLight = new THREE.AmbientLight('#ffffff', 0.34)
+    const ambientLight = new THREE.AmbientLight('#ffffff', resolvedLookSettings.ambientLightIntensity)
     scene.add(ambientLight)
+    const composer = new EffectComposer(renderer)
+    if (typeof composer.setPixelRatio === 'function') {
+      composer.setPixelRatio(window.devicePixelRatio)
+    }
+    composer.setSize(container.clientWidth, container.clientHeight)
+    const renderPass = new RenderPass(scene, camera)
+    composer.addPass(renderPass)
+    const lookPass = new ShaderPass({
+      ...LOOK_ADJUST_SHADER,
+      uniforms: {
+        tDiffuse: { value: null },
+        resolution: { value: { x: 1, y: 1 } },
+        contrast: { value: DEFAULT_VIEWER_LOOK_SETTINGS.contrast },
+        vibrance: { value: DEFAULT_VIEWER_LOOK_SETTINGS.vibrance },
+        sharpen: { value: DEFAULT_VIEWER_LOOK_SETTINGS.sharpen },
+      },
+    })
+    lookPass.uniforms.contrast.value = resolvedLookSettings.contrast
+    lookPass.uniforms.vibrance.value = resolvedLookSettings.vibrance
+    lookPass.uniforms.sharpen.value = resolvedLookSettings.sharpen
+    lookPass.uniforms.resolution.value = {
+      x: container.clientWidth || 1,
+      y: container.clientHeight || 1,
+    }
+    composer.addPass(lookPass)
+    lookRuntimeRef.current = {
+      renderer,
+      scene,
+      keyLight,
+      fillLight,
+      rimLight,
+      ambientLight,
+      lookPass,
+      roughnessMaterials: [],
+    }
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
@@ -282,30 +503,22 @@ export function ModelViewer({
     let targetSkinnedMesh = null
     let activeAnimationDuration = 0
     const clock = new THREE.Clock()
-    const worldUp = new THREE.Vector3(0, 1, 0)
+
+    const renderScene = (renderCamera = camera) => {
+      renderPass.camera = renderCamera
+      composer.render()
+    }
 
     const captureEightViews = async () => {
       if (!loadedScene || !hasLoadedModel) {
         throw new Error('3D model is still loading. Try again in a moment.')
       }
 
-      const originalTarget = controls.target.clone()
-      const originalPosition = camera.position.clone()
-      const originalQuaternion = camera.quaternion.clone()
-      const { center: captureTarget, orbitDistance, pitchRad } = getCaptureFraming(
-        camera,
-        loadedScene,
-        { pitchDeg: ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG },
-      )
-      // The generated Tripo character forward axis aligns with +X in this viewer.
-      // Use +X as canonical front so capture labels map to actual views.
-      const baseHorizontal = new THREE.Vector3(1, 0, 0)
-      const horizontalRadius = orbitDistance * Math.cos(pitchRad)
-      const verticalOffset = orbitDistance * Math.sin(pitchRad)
-
       const screenshots = {}
       const originalBackground = scene.background
       const originalGridVisibility = floorGrid?.visible ?? false
+      const captureCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100)
+      captureCamera.aspect = container.clientWidth / Math.max(container.clientHeight, 1)
 
       isCapturingSnapshotsRef.current = true
       try {
@@ -315,17 +528,11 @@ export function ModelViewer({
         }
 
         for (const preset of VIEW_CAPTURE_PRESETS) {
-          const direction = baseHorizontal
-            .clone()
-            .applyAxisAngle(worldUp, THREE.MathUtils.degToRad(preset.yawDeg))
-            .normalize()
-
-          camera.position.copy(captureTarget).addScaledVector(direction, horizontalRadius)
-          camera.position.y += verticalOffset
-          camera.lookAt(captureTarget)
-          controls.target.copy(captureTarget)
-          controls.update()
-          renderer.render(scene, camera)
+          configureOrthographicCaptureCamera(captureCamera, loadedScene, {
+            yawDeg: preset.yawDeg,
+            pitchDeg: ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG,
+          })
+          renderScene(captureCamera)
 
           screenshots[preset.key] = {
             label: preset.label,
@@ -337,11 +544,7 @@ export function ModelViewer({
         if (floorGrid) {
           floorGrid.visible = originalGridVisibility
         }
-        camera.position.copy(originalPosition)
-        camera.quaternion.copy(originalQuaternion)
-        controls.target.copy(originalTarget)
-        controls.update()
-        renderer.render(scene, camera)
+        renderScene(camera)
         isCapturingSnapshotsRef.current = false
       }
 
@@ -350,7 +553,6 @@ export function ModelViewer({
 
     const captureAnimatedSpriteDirections = async ({
       frameCount = ANIMATED_SPRITE_CAPTURE_FRAME_COUNT,
-      captureFov = ANIMATED_SPRITE_CAPTURE_FOV,
     } = {}) => {
       if (!loadedScene || !hasLoadedModel) {
         throw new Error('3D model is still loading. Try again in a moment.')
@@ -361,14 +563,18 @@ export function ModelViewer({
       }
 
       const resolvedFrameCount = Math.max(Math.round(Number(frameCount) || 0), 2)
-      const originalTarget = controls.target.clone()
-      const originalPosition = camera.position.clone()
-      const originalQuaternion = camera.quaternion.clone()
+      const resolvedDelayMs = resolveAnimatedSpriteCaptureDelayMs(
+        activeAnimationDuration,
+        resolvedFrameCount,
+        DEFAULT_ANIMATED_SPRITE_DELAY_MS,
+        animationSelectionKey,
+      )
       const originalBackground = scene.background
       const originalGridVisibility = floorGrid?.visible ?? false
-      const originalFov = camera.fov
       const originalMixerTime = mixer.time
       const sprites = {}
+      const captureCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100)
+      captureCamera.aspect = container.clientWidth / Math.max(container.clientHeight, 1)
 
       isCapturingSnapshotsRef.current = true
       try {
@@ -377,41 +583,24 @@ export function ModelViewer({
           floorGrid.visible = false
         }
 
-        camera.fov = captureFov
-        camera.updateProjectionMatrix()
-        const { center: captureTarget, orbitDistance, pitchRad } = getCaptureFraming(
-          camera,
-          loadedScene,
-          { pitchDeg: ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG },
-        )
-        const baseHorizontal = new THREE.Vector3(1, 0, 0)
-        const horizontalRadius = orbitDistance * Math.cos(pitchRad)
-        const verticalOffset = orbitDistance * Math.sin(pitchRad)
-
         for (const preset of VIEW_CAPTURE_PRESETS) {
-          const direction = baseHorizontal
-            .clone()
-            .applyAxisAngle(worldUp, THREE.MathUtils.degToRad(preset.yawDeg))
-            .normalize()
-
-          camera.position.copy(captureTarget).addScaledVector(direction, horizontalRadius)
-          camera.position.y += verticalOffset
-          camera.lookAt(captureTarget)
-          controls.target.copy(captureTarget)
-          controls.update()
+          configureOrthographicCaptureCamera(captureCamera, loadedScene, {
+            yawDeg: preset.yawDeg,
+            pitchDeg: ISOMETRIC_SPRITE_CAPTURE_PITCH_DEG,
+          })
 
           const frameDataUrls = []
           for (let frameIndex = 0; frameIndex < resolvedFrameCount; frameIndex += 1) {
             const normalizedProgress = frameIndex / resolvedFrameCount
             mixer.setTime(activeAnimationDuration * normalizedProgress)
-            renderer.render(scene, camera)
+            renderScene(captureCamera)
             frameDataUrls.push(renderer.domElement.toDataURL('image/png'))
           }
 
           sprites[preset.key] = {
             label: preset.label,
             frameDataUrls,
-            delayMs: ANIMATED_SPRITE_FRAME_DELAY_MS,
+            delayMs: resolvedDelayMs,
           }
         }
       } finally {
@@ -420,13 +609,7 @@ export function ModelViewer({
         if (floorGrid) {
           floorGrid.visible = originalGridVisibility
         }
-        camera.fov = originalFov
-        camera.updateProjectionMatrix()
-        camera.position.copy(originalPosition)
-        camera.quaternion.copy(originalQuaternion)
-        controls.target.copy(originalTarget)
-        controls.update()
-        renderer.render(scene, camera)
+        renderScene(camera)
         isCapturingSnapshotsRef.current = false
       }
 
@@ -477,6 +660,14 @@ export function ModelViewer({
       (gltf) => {
         loadedScene = gltf.scene
         scene.add(loadedScene)
+        const roughnessMaterials = collectRoughnessMaterials(loadedScene)
+        applyMaterialRoughnessMultiplier(
+          roughnessMaterials,
+          latestLookSettingsRef.current.roughnessMultiplier,
+        )
+        if (lookRuntimeRef.current) {
+          lookRuntimeRef.current.roughnessMaterials = roughnessMaterials
+        }
         fitCameraToObject(camera, controls, loadedScene)
         floorGrid = buildFloorGrid(loadedScene)
         scene.add(floorGrid)
@@ -562,6 +753,11 @@ export function ModelViewer({
       camera.aspect = container.clientWidth / container.clientHeight
       camera.updateProjectionMatrix()
       renderer.setSize(container.clientWidth, container.clientHeight, false)
+      composer.setSize(container.clientWidth, container.clientHeight)
+      lookPass.uniforms.resolution.value = {
+        x: container.clientWidth || 1,
+        y: container.clientHeight || 1,
+      }
     })
 
     resizeObserver.observe(container)
@@ -572,16 +768,20 @@ export function ModelViewer({
       if (mixer && delta > 0 && !isCapturingSnapshotsRef.current) {
         mixer.update(Math.min(delta, 0.05))
       }
-      renderer.render(scene, camera)
+      renderScene(camera)
     })
 
     return () => {
       if (typeof onCaptureApiReady === 'function') {
         onCaptureApiReady(null)
       }
+      lookRuntimeRef.current = null
       resizeObserver.disconnect()
       renderer.setAnimationLoop(null)
       controls.dispose()
+      if (typeof composer.dispose === 'function') {
+        composer.dispose()
+      }
       pmremGenerator.dispose()
       if (mixer) {
         mixer.stopAllAction()
@@ -609,6 +809,30 @@ export function ModelViewer({
     modelUrl,
     onCaptureApiReady,
   ])
+
+  useEffect(() => {
+    const runtime = lookRuntimeRef.current
+    if (!runtime) {
+      return
+    }
+
+    const resolvedLookSettings = normalizeViewerLookSettings(lookSettings)
+    latestLookSettingsRef.current = resolvedLookSettings
+    runtime.renderer.toneMapping = resolveToneMapping(resolvedLookSettings.toneMapping)
+    runtime.renderer.toneMappingExposure = resolvedLookSettings.exposure
+    runtime.scene.environmentIntensity = resolvedLookSettings.environmentIntensity
+    runtime.keyLight.intensity = resolvedLookSettings.keyLightIntensity
+    runtime.fillLight.intensity = resolvedLookSettings.fillLightIntensity
+    runtime.rimLight.intensity = resolvedLookSettings.rimLightIntensity
+    runtime.ambientLight.intensity = resolvedLookSettings.ambientLightIntensity
+    applyMaterialRoughnessMultiplier(
+      runtime.roughnessMaterials || [],
+      resolvedLookSettings.roughnessMultiplier,
+    )
+    runtime.lookPass.uniforms.contrast.value = resolvedLookSettings.contrast
+    runtime.lookPass.uniforms.vibrance.value = resolvedLookSettings.vibrance
+    runtime.lookPass.uniforms.sharpen.value = resolvedLookSettings.sharpen
+  }, [lookSettings])
 
   useEffect(() => {
     if (resetSignal > 0 && controlsRef.current) {

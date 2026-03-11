@@ -77,7 +77,7 @@ export const buildViewPrompt = ({ view, characterPrompt, multiviewPrompt }) => {
 
   const directionalConstraint =
     view === 'left'
-      ? "Character-left profile only. This is the character's LEFT side."
+      ? 'Character-left profile only. Head and toes point to the left side of the image.'
       : view === 'right'
         ? "Character-right profile only. This is the character's RIGHT side."
         : view === 'front'

@@ -15,10 +15,16 @@ const MULTI_ANIMATION_PRESETS = Object.freeze([
     key: 'idle',
     preset: 'preset:biped:wait',
     aliases: ['preset:idle', 'preset:biped:idle'],
-    label: 'Idle',
+    label: 'Wait',
   },
   { key: 'walk', preset: 'preset:walk', aliases: ['preset:biped:walk'], label: 'Walk' },
   { key: 'run', preset: 'preset:run', aliases: ['preset:biped:run'], label: 'Run' },
+  {
+    key: 'look_around',
+    preset: 'preset:biped:standing_relax',
+    aliases: ['preset:look_around', 'preset:standing_relax', 'preset:biped:look_around'],
+    label: 'Idle',
+  },
   { key: 'slash', preset: 'preset:slash', aliases: ['preset:biped:slash'], label: 'Slash' },
 ])
 const MULTI_ANIMATION_VARIANT_PRIORITY = ['animation_model', 'animated_model']
