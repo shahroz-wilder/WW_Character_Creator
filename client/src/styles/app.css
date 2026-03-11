@@ -484,9 +484,12 @@
 
 .dev-panel {
   position: fixed;
-  right: 24px;
+  right: clamp(8px, 2vw, 24px);
   bottom: 80px;
-  width: min(420px, calc(100vw - 48px));
+  width: min(560px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  --dev-field-width: min(360px, 100%);
+  --dev-button-width: min(240px, calc((100% - 8px) / 2));
   max-height: calc(100vh - 120px);
   padding: 16px;
   border-radius: 24px;
@@ -516,14 +519,19 @@
   margin: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding-right: 4px;
+  padding-right: 18px;
   min-height: 0;
   min-width: 0;
+  scrollbar-gutter: stable;
 }
 
-.action-row--dev {
+.dev-panel .action-row--dev {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 4px;
   min-width: 0;
+  align-items: flex-start;
 }
 
 .dev-panel__field {
@@ -543,8 +551,9 @@
 .dev-panel__field input,
 .dev-panel__field textarea,
 .dev-panel__field select {
-  width: 100%;
-  max-width: 100%;
+  justify-self: start;
+  width: var(--dev-field-width);
+  max-width: var(--dev-field-width);
   min-width: 0;
   box-sizing: border-box;
   border: 1px solid rgba(255, 124, 87, 0.2);
@@ -562,8 +571,55 @@
   white-space: pre-wrap;
 }
 
-.action-row--dev > * {
+.dev-panel .action-row--dev > * {
   min-width: 0;
+}
+
+.dev-panel .action-row--dev > .primary-button,
+.dev-panel .action-row--dev > .secondary-button,
+.dev-panel .action-row--dev > .ghost-button,
+.dev-panel .action-row--dev > .accept-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--dev-button-width);
+  flex: 0 0 var(--dev-button-width);
+  min-width: 0;
+  max-width: var(--dev-button-width);
+  box-sizing: border-box;
+  min-height: 46px;
+  padding: 10px 14px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.dev-panel .action-row--dev > .primary-button {
+  color: #0b0b0d;
+}
+
+.dev-panel .action-row--dev > .secondary-button,
+.dev-panel .action-row--dev > .ghost-button,
+.dev-panel .action-row--dev > .accept-button {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.dev-panel .action-row--dev > .primary-button:disabled {
+  opacity: 1;
+  color: rgba(11, 11, 13, 0.78);
+  background: linear-gradient(135deg, rgba(255, 106, 61, 0.74), rgba(255, 130, 96, 0.74));
+  border: 1px solid rgba(255, 100, 52, 0.28);
+}
+
+.dev-panel .action-row--dev > .secondary-button:disabled,
+.dev-panel .action-row--dev > .ghost-button:disabled,
+.dev-panel .action-row--dev > .accept-button:disabled {
+  opacity: 1;
+  color: rgba(255, 255, 255, 0.58);
+  background: linear-gradient(90deg, rgba(36, 41, 56, 0.62), rgba(6, 8, 14, 0.62));
+  border: 1px solid rgba(255, 100, 52, 0.28);
 }
 
 .dev-panel__status {
@@ -1542,6 +1598,21 @@
     width: 100%;
   }
 
+  .dev-panel .action-row--dev {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .dev-panel .action-row--dev > .primary-button,
+  .dev-panel .action-row--dev > .secondary-button,
+  .dev-panel .action-row--dev > .accept-button,
+  .dev-panel .action-row--dev > .ghost-button {
+    width: var(--dev-button-width);
+    max-width: var(--dev-button-width);
+    flex: 0 0 var(--dev-button-width);
+  }
+
   .accept-button--icon-only {
     width: 46px;
   }
@@ -1550,5 +1621,19 @@
   .viewer-placeholder {
     min-height: 420px;
     height: 420px;
+  }
+
+  .dev-panel {
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-width: none;
+    bottom: 68px;
+    max-height: calc(100dvh - 84px);
+  }
+
+  .dev-toggle {
+    right: 8px;
+    bottom: 12px;
   }
 }

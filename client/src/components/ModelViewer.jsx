@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
@@ -472,6 +473,7 @@ export function ModelViewer({
       y: container.clientHeight || 1,
     }
     composer.addPass(lookPass)
+    composer.addPass(new OutputPass())
     lookRuntimeRef.current = {
       renderer,
       scene,

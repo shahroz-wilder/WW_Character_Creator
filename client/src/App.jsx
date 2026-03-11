@@ -66,7 +66,8 @@ const ModelViewer = lazy(() =>
   import('./components/ModelViewer').then((module) => ({ default: module.ModelViewer })),
 )
 
-const DEFAULT_RETARGET_ANIMATION_INPUT = 'preset:biped:walk preset:biped:run'
+const DEFAULT_RETARGET_ANIMATION_INPUT =
+  'preset:biped:walk preset:biped:run preset:biped:look_around'
 const AUTO_STEP03_MESH_QUALITY = 'detailed'
 const AUTO_STEP03_TEXTURE_QUALITY = 'detailed'
 const AUTO_STEP03_FACE_LIMIT = 64000
@@ -79,12 +80,12 @@ const DEV_PRESETS = {
   multiviewPreset: DEFAULT_MULTIVIEW_PROMPT,
   spriteSize: 128,
   tripoAnimationMode: 'static',
-  tripoPbr: true,
+  tripoPbr: false,
   tripoRetargetAnimations: DEFAULT_RETARGET_ANIMATION_INPUT,
   tripoRetargetAnimationName: '',
-  tripoMeshQuality: 'standard',
-  tripoTextureQuality: 'standard',
-  tripoFaceLimit: '',
+  tripoMeshQuality: 'detailed',
+  tripoTextureQuality: 'detailed',
+  tripoFaceLimit: '64000',
   defaultSpritesEnabled: false,
   viewerLook: DEFAULT_VIEWER_LOOK_SETTINGS,
 }
@@ -133,7 +134,7 @@ const STEP03_PREVIEW_OPTIONS = Object.freeze([
   {
     key: 'look_around',
     label: 'Idle',
-    preset: 'preset:biped:standing_relax',
+    preset: 'preset:biped:look_around',
     isAnimated: true,
   },
   { key: 'slash', label: 'Slash', preset: 'preset:slash', isAnimated: true },
@@ -172,6 +173,7 @@ const ANIMATION_KEY_BY_PRESET = Object.freeze(
     }
     if (option.key === 'look_around') {
       lookup['preset:look_around'] = option.key
+      lookup['preset:biped:look_around'] = option.key
       lookup['preset:standing_relax'] = option.key
       lookup['preset:biped:standing_relax'] = option.key
     }
@@ -1228,6 +1230,14 @@ const normalizeTripoFaceLimitInput = (value, fallback = DEV_PRESETS.tripoFaceLim
   return String(Math.floor(parsedValue))
 }
 
+const resolveStoredTripoFaceLimitInput = (value, fallback = DEV_PRESETS.tripoFaceLimit) => {
+  if (value === undefined || value === null) {
+    return String(fallback || '')
+  }
+
+  return normalizeTripoFaceLimitInput(value, fallback)
+}
+
 const formatSliderValue = (value, digits = 2) =>
   Number(value)
     .toFixed(digits)
@@ -1272,7 +1282,7 @@ function App() {
       initialSession?.devSettings?.tripoTextureQuality,
       DEV_PRESETS.tripoTextureQuality,
     ),
-    tripoFaceLimit: normalizeTripoFaceLimitInput(
+    tripoFaceLimit: resolveStoredTripoFaceLimitInput(
       initialSession?.devSettings?.tripoFaceLimit,
       DEV_PRESETS.tripoFaceLimit,
     ),
@@ -1487,11 +1497,9 @@ function App() {
     : resolvedSpritePreviewMode === SPRITE_360_PREVIEW_KEY
       ? resolveSharedSpriteDirections(spriteResult)
       : resolveSpriteAnimationDirections(spriteResult, resolvedSpritePreviewMode)
-  const isStep01Unlocked = pipelineState.unlocked.step1
   const isStep02Unlocked = pipelineState.unlocked.step2
   const isStep03Unlocked = pipelineState.unlocked.step3
   const isStep04Unlocked = pipelineState.unlocked.step4
-  const isTripoJobInFlight = shouldContinuePollingTripoJob(tripoJob)
   const hasStep03ModelTask = Boolean(step03TaskState.modelTaskId)
   const hasStep03RigTask = Boolean(step03TaskState.rigTaskId)
   const hasStep03AnimateTask = Boolean(step03TaskState.animateTaskId)
@@ -1528,10 +1536,8 @@ function App() {
       ['animate_retarget', 'animate_model'].includes(getNormalizedTaskType(tripoJob.taskType)),
   )
   const hasStep04Output = hasRequiredSpriteBundle(spriteResult, requiredSpriteAnimationKeys)
-  const canApproveStep01 = isStep01Unlocked && hasPortraitStepReady && !isGeneratingPortrait
   const canRunStep02Generation =
     isStep02Unlocked && hasPortraitStepReady && !turnaroundGenerationMode && !isGeneratingPortrait
-  const canApproveStep02 = isStep02Unlocked && hasTurnaroundStepReady && !turnaroundGenerationMode
   const canRunStep03Generation =
     isStep03Unlocked &&
     hasTurnaroundStepReady &&
@@ -1554,7 +1560,6 @@ function App() {
     isStep03Unlocked &&
     hasStep03RigTask &&
     !isCreatingRetargetTask
-  const canApproveStep03 = isStep03Unlocked && hasStep03ChainResult && !isCreatingRetargetTask
   const canRunStep04Generation =
     isStep04Unlocked &&
     hasRequiredAnimationCatalogOutput(tripoJob, configuredRetargetAnimations) &&
@@ -1782,7 +1787,7 @@ function App() {
             session.devSettings?.tripoTextureQuality,
             currentDevSettings.tripoTextureQuality,
           ),
-          tripoFaceLimit: normalizeTripoFaceLimitInput(
+          tripoFaceLimit: resolveStoredTripoFaceLimitInput(
             session.devSettings?.tripoFaceLimit,
             currentDevSettings.tripoFaceLimit,
           ),
@@ -2057,6 +2062,16 @@ function App() {
           : currentJob?.requestedAnimations || [],
     }))
     setStep03TaskState((currentState) => mergeStep03TaskStateWithJob(currentState, nextJob))
+    if (
+      String(nextJob?.status || '').trim().toLowerCase() === 'success' &&
+      ANIMATED_TASK_TYPES.has(getNormalizedTaskType(nextJob?.taskType)) &&
+      hasExpectedTaskOutput(nextJob, configuredRetargetAnimations)
+    ) {
+      updatePipelineState((nextState) => {
+        nextState.approved.step3 = true
+        nextState.unlocked.step4 = true
+      })
+    }
     if (nextJob?.taskId) {
       const normalizedStatus = String(nextJob.status || '').trim().toLowerCase()
       if (normalizedStatus === 'success' || normalizedStatus === 'failed') {
@@ -2562,6 +2577,12 @@ function App() {
           }),
         )
       }
+      if (hasCompleteTurnaround(result.views)) {
+        updatePipelineState((nextState) => {
+          nextState.approved.step2 = true
+          nextState.unlocked.step3 = true
+        })
+      }
       generationStatus = 'success'
       return result
     } catch (requestError) {
@@ -2590,6 +2611,9 @@ function App() {
     setTripoJob(EMPTY_JOB)
     setStep03TaskState(createInitialStep03TaskState())
 
+    let runId = ''
+    let nextPortrait = null
+
     try {
       const result = await generatePortrait({
         prompt,
@@ -2597,8 +2621,8 @@ function App() {
         portraitAspectRatio: devSettings.portraitAspectRatio,
         portraitPromptPreset: devSettings.portraitPromptPreset,
       })
-      const runId = createRunId()
-      const nextPortrait = {
+      runId = createRunId()
+      nextPortrait = {
         imageDataUrl: result.imageDataUrl,
         modelUsed: result.modelUsed || '',
         promptUsed: result.promptUsed,
@@ -2626,20 +2650,18 @@ function App() {
       return
     }
 
-    setIsGeneratingPortrait(false)
     recordTaskTiming('portrait', startedAt, generationStatus)
-  }
-
-  const handleAcceptPortrait = () => {
-    if (!canApproveStep01) {
-      return
-    }
-
-    setError('')
     updatePipelineState((nextState) => {
       nextState.approved.step1 = true
       nextState.unlocked.step2 = true
     })
+    await runMultiviewGeneration({
+      mode: 'full',
+      portraitSource: nextPortrait,
+      runIdForHistory: runId,
+    })
+
+    setIsGeneratingPortrait(false)
   }
 
   const handleGenerateStep02 = async () => {
@@ -2651,18 +2673,6 @@ function App() {
       mode: 'full',
       portraitSource: portraitResult,
       runIdForHistory: currentRunId,
-    })
-  }
-
-  const handleAcceptStep02 = () => {
-    if (!canApproveStep02) {
-      return
-    }
-
-    setError('')
-    updatePipelineState((nextState) => {
-      nextState.approved.step2 = true
-      nextState.unlocked.step3 = true
     })
   }
 
@@ -3214,18 +3224,6 @@ function App() {
     } catch {
       // Error state is already handled in the submit helper.
     }
-  }
-
-  const handleAcceptStep03 = () => {
-    if (!canApproveStep03) {
-      return
-    }
-
-    setError('')
-    updatePipelineState((nextState) => {
-      nextState.approved.step3 = true
-      nextState.unlocked.step4 = true
-    })
   }
 
   const handleGenerateStep04 = async () => {
@@ -3988,9 +3986,7 @@ function App() {
                 referenceImage={referenceImage}
                 onReferenceImageChange={setReferenceImage}
                 onGeneratePortrait={handleGeneratePortrait}
-                onAccept={handleAcceptPortrait}
                 isGeneratingPortrait={isGeneratingPortrait}
-                isAcceptDisabled={!canApproveStep01}
               />
             </div>
           </section>
@@ -4018,30 +4014,10 @@ function App() {
                 <button
                   type="button"
                   className="primary-button"
-                  disabled={!canRunStep02Generation}
-                  onClick={handleGenerateStep02}
+                  disabled={!canRunStep03AutoPipeline}
+                  onClick={handleGenerateStep03Auto}
                 >
-                  {turnaroundGenerationMode ? 'Generating 2D...' : 'Generate 2D'}
-                </button>
-                <button
-                  type="button"
-                  className="accept-button accept-button--icon-only"
-                  disabled={!canApproveStep02}
-                  onClick={handleAcceptStep02}
-                  aria-label="Accept Multiview"
-                >
-                  <span className="accept-button__icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path
-                        d="M6.5 12.5 10.5 16.5 18 8.8"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </span>
+                  {isRunningAuto3dPipeline ? 'Running 3D...' : 'Generate 3D'}
                 </button>
               </div>
             </section>
@@ -4099,64 +4075,6 @@ function App() {
                   </div>
                 )}
               </div>
-            <div className="action-row action-row--compact">
-              <button
-                type="button"
-                className={embedded ? 'primary-button' : 'secondary-button'}
-                disabled={!canRunStep03AutoPipeline}
-                onClick={handleGenerateStep03Auto}
-              >
-                {isRunningAuto3dPipeline ? 'Running 3D Auto...' : 'Generate 3D Auto'}
-              </button>
-              {!embedded && (
-                <>
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={!canRunStep03Generation || isRunningAuto3dPipeline}
-                    onClick={handleGenerateStep03}
-                  >
-                    {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={!canRunStep03AutoRig || isRunningAuto3dPipeline}
-                    onClick={handleStep03AutoRig}
-                  >
-                    {isCreatingRigTask ? 'Rigging...' : 'AutoRig'}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={!canRunStep03Animate || isRunningAuto3dPipeline}
-                    onClick={handleStep03Animate}
-                  >
-                    {isCreatingRetargetTask ? 'Animating...' : 'Animate'}
-                  </button>
-                  <button
-                    type="button"
-                    className="accept-button accept-button--icon-only"
-                    disabled={!canApproveStep03}
-                    onClick={handleAcceptStep03}
-                    aria-label="Accept 3D"
-                  >
-                    <span className="accept-button__icon" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path
-                          d="M6.5 12.5 10.5 16.5 18 8.8"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </span>
-                  </button>
-                </>
-              )}
-              </div>
             </section>
           </section>
 
@@ -4198,39 +4116,30 @@ function App() {
             <div className="action-row action-row--compact">
               <button
                 type="button"
-                className="primary-button"
-                disabled={!canRunStep04Generation || isRunningAuto3dPipeline}
-                onClick={handleGenerateStep04}
+                className="secondary-button"
+                disabled={!canDownloadFinalBundle}
+                onClick={handleDownloadFinalBundle}
               >
-                {isGeneratingSprite || isCapturingWalkSprites ? 'Generating 2.5D...' : 'Generate 2.5D'}
+                {isPreparingDownloadBundle ? 'Preparing...' : 'Download'}
               </button>
-              {embedded ? (
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={!canSendToGame}
-                  onClick={handleSendToGame}
-                >
-                  {isSendingToGame ? 'Sending...' : 'Use in Game'}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={!canDownloadFinalBundle}
-                  onClick={handleDownloadFinalBundle}
-                >
-                  {isPreparingDownloadBundle ? 'Preparing...' : 'Download'}
-                </button>
-              )}
               {embedded && (
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={sendClose}
-                >
-                  Close
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={!canSendToGame}
+                    onClick={handleSendToGame}
+                  >
+                    {isSendingToGame ? 'Sending...' : 'Use in Game'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={sendClose}
+                  >
+                    Close
+                  </button>
+                </>
               )}
             </div>
           </section>
@@ -4680,6 +4589,62 @@ function App() {
             <div className="action-row action-row--compact action-row--dev">
               <button
                 type="button"
+                className="primary-button"
+                disabled={!canRunStep02Generation}
+                onClick={handleGenerateStep02}
+              >
+                {turnaroundGenerationMode ? 'Generating 2D...' : 'Generate 2D'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!canRunStep03AutoPipeline}
+                onClick={handleGenerateStep03Auto}
+              >
+                {isRunningAuto3dPipeline ? 'Running 3D Auto...' : 'Generate 3D Auto'}
+              </button>
+            </div>
+            <div className="action-row action-row--compact action-row--dev">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!canRunStep03Generation || isRunningAuto3dPipeline}
+                onClick={handleGenerateStep03}
+              >
+                {isCreatingModel ? 'Generating 3D...' : 'Generate 3D'}
+              </button>
+            </div>
+            <div className="action-row action-row--compact action-row--dev">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!canRunStep03AutoRig || isRunningAuto3dPipeline}
+                onClick={handleStep03AutoRig}
+              >
+                {isCreatingRigTask ? 'Rigging...' : 'AutoRig'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!canRunStep03Animate || isRunningAuto3dPipeline}
+                onClick={handleStep03Animate}
+              >
+                {isCreatingRetargetTask ? 'Animating...' : 'Animate'}
+              </button>
+            </div>
+            <div className="action-row action-row--compact action-row--dev">
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!canRunStep04Generation || isRunningAuto3dPipeline}
+                onClick={handleGenerateStep04}
+              >
+                {isGeneratingSprite || isCapturingWalkSprites ? 'Generating 2.5D...' : 'Generate 2.5D'}
+              </button>
+            </div>
+            <div className="action-row action-row--compact action-row--dev">
+              <button
+                type="button"
                 className="secondary-button"
                 onClick={() => handleGenerateTurnaround('front-only')}
                 disabled={!portraitResult?.imageDataUrl || turnaroundGenerationMode !== ''}
@@ -4698,6 +4663,8 @@ function App() {
                   ? 'Generating multiview...'
                   : 'Generate Multiview'}
               </button>
+            </div>
+            <div className="action-row action-row--compact action-row--dev">
               <button
                 type="button"
                 className="ghost-button"
@@ -4723,6 +4690,8 @@ function App() {
               >
                 {devSettings.defaultSpritesEnabled ? 'Default Sprites: ON' : 'Default Sprites: OFF'}
               </button>
+            </div>
+            <div className="action-row action-row--compact action-row--dev">
               <button
                 type="button"
                 className="ghost-button"
@@ -4866,6 +4835,8 @@ function App() {
                 >
                   {isCreatingFrontBackModel ? 'Submitting 3D FrontBack...' : '3D FrontBack'}
                 </button>
+              </div>
+              <div className="action-row action-row--compact action-row--dev">
                 <button
                   type="button"
                   className="secondary-button"
@@ -4882,6 +4853,8 @@ function App() {
                 >
                   {isCreatingPreRigCheckTask ? 'Submitting PreRigCheck...' : 'PreRigCheck'}
                 </button>
+              </div>
+              <div className="action-row action-row--compact action-row--dev">
                 <button
                   type="button"
                   className="secondary-button"
@@ -4916,6 +4889,8 @@ function App() {
                 >
                   Download GLB
                 </button>
+              </div>
+              <div className="action-row action-row--compact action-row--dev">
                 <button
                   type="button"
                   className="ghost-button"
@@ -4932,6 +4907,8 @@ function App() {
                 >
                   {isRestartingServer ? 'Restarting Server...' : 'Restart Server'}
                 </button>
+              </div>
+              <div className="action-row action-row--compact action-row--dev">
                 <button
                   type="button"
                   className="secondary-button"
@@ -4961,6 +4938,8 @@ function App() {
                 >
                   Download 8 Views ZIP
                 </button>
+              </div>
+              <div className="action-row action-row--compact action-row--dev">
                 <button
                   type="button"
                   className="secondary-button"
