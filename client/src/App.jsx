@@ -2685,6 +2685,10 @@ function App() {
       if (!mvResult || !hasCompleteTurnaround(mvResult.views)) {
         throw new Error('Multiview generation failed.')
       }
+      updatePipelineState((nextState) => {
+        nextState.approved.step2 = true
+        nextState.unlocked.step3 = true
+      })
     } catch (requestError) {
       setError(
         sanitizeProviderNames(
@@ -4160,7 +4164,8 @@ function App() {
                 />
               </div>
               {embedded ? (
-                multiviewResult?.views && hasCompleteTurnaround(multiviewResult.views) && (
+                multiviewResult?.views && hasCompleteTurnaround(multiviewResult.views)
+                  && !pipelineState.approved.step3 && (
                   <div className="action-row action-row--compact">
                     <button
                       type="button"
