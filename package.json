@@ -5,7 +5,10 @@
   "scripts": {
     "dev:server": "npm --prefix server run dev",
     "dev:client": "npm --prefix client run dev",
-    "start-all": "concurrently --kill-others-on-fail --names server,client --prefix-colors blue,green \"npm --prefix server run dev\" \"npm --prefix client run dev\""
+    "start-all": "concurrently --kill-others-on-fail --names server,client --prefix-colors blue,green \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "build": "npm --prefix client run build",
+    "start": "npm --prefix server run start",
+    "install:all": "npm install && npm --prefix client install && npm --prefix server install"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
