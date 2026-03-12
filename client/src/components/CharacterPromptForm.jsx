@@ -8,6 +8,7 @@ export function CharacterPromptForm({
   onGeneratePortrait,
   isGeneratingPortrait,
   embedded = false,
+  hideGenerateButton = false,
   title = 'Identity Portrait',
   stepLabel = 'Step 01',
 }) {
@@ -34,17 +35,19 @@ export function CharacterPromptForm({
         />
       </div>
 
-      <div className="action-row action-row--portrait">
-        <button
-          type="button"
-          className="primary-button"
-          onClick={onGeneratePortrait}
-          disabled={isGeneratingPortrait}
-          aria-label="Generate 2D"
-        >
-          {isGeneratingPortrait ? 'Generating 2D...' : 'Generate 2D'}
-        </button>
-      </div>
+      {!hideGenerateButton && (
+        <div className="action-row action-row--portrait">
+          <button
+            type="button"
+            className="primary-button"
+            onClick={onGeneratePortrait}
+            disabled={isGeneratingPortrait}
+            aria-label="Generate Portrait"
+          >
+            {isGeneratingPortrait ? 'Generating...' : 'Generate Portrait'}
+          </button>
+        </div>
+      )}
     </>
   )
 

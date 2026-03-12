@@ -77,7 +77,7 @@ export const createApp = (config = loadEnv(), services = {}) => {
   app.use(express.urlencoded({ extended: true }))
 
   app.use('/api/health', createHealthRouter({ config }))
-  app.use('/api/character', createCharacterRouter({ portraitService, multiviewService }))
+  app.use('/api/character', createCharacterRouter({ portraitService, multiviewService, storageService }))
   app.use('/api/tripo', createTripoRouter({ tripoService }))
   // Serve stored sprite sheets with immutable cache headers
   app.use('/sprites', express.static(storageService.spritesDir, {
