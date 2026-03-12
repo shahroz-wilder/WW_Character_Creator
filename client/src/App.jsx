@@ -4125,7 +4125,8 @@ function App() {
                 hideGenerateButton={!!portraitResult?.imageDataUrl && !isGeneratingPortrait}
               />
             </div>
-            {embedded && portraitResult?.imageDataUrl && !isGeneratingPortrait && (
+            {embedded && portraitResult?.imageDataUrl && !isGeneratingPortrait
+              && !(multiviewResult?.views && hasCompleteTurnaround(multiviewResult.views)) && (
               <div className="action-row action-row--compact">
                 <button
                   type="button"
@@ -4277,14 +4278,16 @@ function App() {
               />
             </div>
             <div className="action-row action-row--compact">
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={!canDownloadFinalBundle}
-                onClick={handleDownloadFinalBundle}
-              >
-                {isPreparingDownloadBundle ? 'Preparing...' : 'Download'}
-              </button>
+              {!embedded && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!canDownloadFinalBundle}
+                  onClick={handleDownloadFinalBundle}
+                >
+                  {isPreparingDownloadBundle ? 'Preparing...' : 'Download'}
+                </button>
+              )}
               {embedded && (
                 <>
                   <button
