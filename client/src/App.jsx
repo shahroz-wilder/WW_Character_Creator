@@ -27,7 +27,7 @@ import {
   resolveCombinedAnimationRowFrameIndex,
 } from './lib/combinedSpriteGif'
 import { downloadBlob, downloadDataUrl, downloadFromUrl } from './lib/download'
-import { isEmbeddedMode, sendSpriteResult, sendClose, getEmbeddedSpriteSize } from './lib/gameIpc'
+import { isEmbeddedMode, sendSpriteResult, sendClose, getEmbeddedSpriteSize, getPlayerId } from './lib/gameIpc'
 import { createHistoryEntry, createRunId, updateHistoryEntry } from './lib/historyStore'
 import {
   clearPersistedSession,
@@ -1613,11 +1613,11 @@ function App() {
       : isGeneratingPortrait
         ? 'Generating portrait'
         : !pipelineState.approved.step1 && hasPortraitStepReady
-          ? 'Portrait ready for approval'
+          ? (embedded ? 'Ready for 2D generation' : 'Portrait ready for approval')
           : turnaroundGenerationMode
             ? 'Generating multiview'
             : !pipelineState.approved.step2 && hasTurnaroundStepReady
-              ? 'Multiview ready for approval'
+              ? (embedded ? 'Ready for 3D generation' : 'Multiview ready for approval')
               : isCreatingModel || isCreatingRigTask || isCreatingRetargetTask
                 ? isCreatingRetargetTask
                   ? 'Applying animation'
@@ -2664,6 +2664,118 @@ function App() {
     setIsGeneratingPortrait(false)
   }
 
+  // ── Embedded mode: Generate 2D (portrait → multiview only) ──
+  const handleEmbeddedGenerate2D = async () => {
+    if (!portraitResult?.imageDataUrl || turnaroundGenerationMode || isGeneratingPortrait) {
+      return
+    }
+
+    setError('')
+
+    try {
+      updatePipelineState((nextState) => {
+        nextState.approved.step1 = true
+        nextState.unlocked.step2 = true
+      })
+      const mvResult = await runMultiviewGeneration({
+        mode: 'full',
+        portraitSource: portraitResult,
+        runIdForHistory: currentRunId,
+      })
+      if (!mvResult || !hasCompleteTurnaround(mvResult.views)) {
+        throw new Error('Multiview generation failed.')
+      }
+    } catch (requestError) {
+      setError(
+        sanitizeProviderNames(
+          requestError?.message || 'Failed to generate 2D views.',
+        ),
+      )
+    }
+  }
+
+  // ── Embedded mode: Generate 3D (Tripo model → rig → animate → sprites) ──
+  const handleEmbeddedGenerate3D = async () => {
+    if (!canRunStep03AutoPipeline) {
+      return
+    }
+
+    setError('')
+    setIsRunningAuto3dPipeline(true)
+
+    try {
+      const requestedAnimations = configuredRetargetAnimations
+      const modelStart = await submitGenerateStep03Task({
+        meshQuality: AUTO_STEP03_MESH_QUALITY,
+        textureQuality: AUTO_STEP03_TEXTURE_QUALITY,
+        pbr: false,
+        faceLimit: AUTO_STEP03_FACE_LIMIT,
+      })
+      if (!modelStart?.taskId) {
+        throw new Error('Failed to start 3D generation.')
+      }
+      const modelJob = await waitForTripoTaskCompletion(modelStart.taskId, {
+        animationMode: 'static',
+        timeoutMessage: 'Timed out while generating the 3D model.',
+      })
+      const rigStart = await submitStep03AutoRigTask(modelJob.taskId)
+      if (!rigStart?.taskId) {
+        throw new Error('Failed to start rigging.')
+      }
+      const rigJob = await waitForTripoTaskCompletion(rigStart.taskId, {
+        animationMode: 'static',
+        acceptSuccessWithoutExpectedOutput: true,
+        timeoutMessage: 'Timed out while rigging the 3D model.',
+      })
+      const animateStart = await submitStep03AnimateTask({
+        sourceTaskId: rigJob.taskId,
+        requestedAnimations,
+      })
+      if (!animateStart?.taskId) {
+        throw new Error('Failed to start animation.')
+      }
+      const animatedJob = await waitForTripoTaskCompletion(animateStart.taskId, {
+        animationMode: 'animated',
+        requestedAnimations,
+        timeoutMessage: 'Timed out while generating animations.',
+      })
+      flushSync(() => {
+        applyTripoJobUpdate(animatedJob)
+        updatePipelineState((nextState) => {
+          nextState.approved.step3 = true
+          nextState.unlocked.step4 = true
+        })
+      })
+
+      const rigVariants = rigJob?.outputs?.variants || null
+      const rigAposeCaptureModelUrl = resolveAposeSourceModelUrl({
+        variantCatalog: {
+          ...(rigVariants || {}),
+          ...(animatedJob?.outputs?.variants || {}),
+        },
+        modelTaskId: step03TaskState.modelTaskId,
+        rigTaskId: rigJob?.taskId || step03TaskState.rigTaskId,
+        priority: APOSE_PREVIEW_MODEL_VARIANT_PRIORITY,
+      })
+      const autoAnimationKeys = getExpectedAnimationOutputKeys(animatedJob, requestedAnimations)
+      await sleep(0)
+      await runStep04Generation({
+        animatedJob,
+        aposeCaptureModelUrl: rigAposeCaptureModelUrl,
+        animationKeys: autoAnimationKeys,
+        primaryAnimationKey: autoAnimationKeys[0] || configuredAnimationPreviewKey,
+      })
+    } catch (requestError) {
+      setError(
+        sanitizeProviderNames(
+          requestError?.message || 'Failed to generate 3D model and sprites.',
+        ),
+      )
+    } finally {
+      setIsRunningAuto3dPipeline(false)
+    }
+  }
+
   const handleGenerateStep02 = async () => {
     if (!canRunStep02Generation) {
       return
@@ -3473,6 +3585,20 @@ function App() {
         spriteSize: Number(spriteResult?.spriteSize) || 128,
         animation: 'walk',
       })
+
+      // Store portrait + 3D model for future use (fire-and-forget)
+      const playerId = getPlayerId()
+      if (playerId) {
+        fetch('/api/characters/store', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerId,
+            portraitDataUrl: portraitResult?.imageDataUrl || null,
+            modelUrl: activeDownloadUrl || activeModelUrl || null,
+          }),
+        }).catch((err) => console.warn('[store] Failed to archive assets:', err.message))
+      }
     } catch (requestError) {
       setError(requestError?.message || 'Failed to send sprite to game.')
     } finally {
@@ -3987,8 +4113,21 @@ function App() {
                 onReferenceImageChange={setReferenceImage}
                 onGeneratePortrait={handleGeneratePortrait}
                 isGeneratingPortrait={isGeneratingPortrait}
+                hideGenerateButton={!!portraitResult?.imageDataUrl && !isGeneratingPortrait}
               />
             </div>
+            {embedded && portraitResult?.imageDataUrl && !isGeneratingPortrait && (
+              <div className="action-row action-row--compact">
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={turnaroundGenerationMode || !portraitResult?.imageDataUrl}
+                  onClick={handleEmbeddedGenerate2D}
+                >
+                  {turnaroundGenerationMode ? 'Generating 2D...' : 'Generate 2D'}
+                </button>
+              </div>
+            )}
           </section>
 
           <section className="panel-card workspace-stage" aria-label="Center Stage Panel">
@@ -4010,16 +4149,31 @@ function App() {
                   embedded
                 />
               </div>
-              <div className="action-row action-row--compact">
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={!canRunStep03AutoPipeline}
-                  onClick={handleGenerateStep03Auto}
-                >
-                  {isRunningAuto3dPipeline ? 'Running 3D...' : 'Generate 3D'}
-                </button>
-              </div>
+              {embedded ? (
+                multiviewResult?.views && hasCompleteTurnaround(multiviewResult.views) && (
+                  <div className="action-row action-row--compact">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={!canRunStep03AutoPipeline}
+                      onClick={handleEmbeddedGenerate3D}
+                    >
+                      {isRunningAuto3dPipeline ? 'Generating 3D...' : 'Generate 3D'}
+                    </button>
+                  </div>
+                )
+              ) : (
+                <div className="action-row action-row--compact">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={!canRunStep03AutoPipeline}
+                    onClick={handleGenerateStep03Auto}
+                  >
+                    {isRunningAuto3dPipeline ? 'Running 3D...' : 'Generate 3D'}
+                  </button>
+                </div>
+              )}
             </section>
 
             <section

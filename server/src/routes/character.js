@@ -11,7 +11,7 @@ const upload = multer({
   },
 })
 
-export const createCharacterRouter = ({ portraitService, multiviewService }) => {
+export const createCharacterRouter = ({ portraitService, multiviewService, storageService }) => {
   const router = Router()
 
   router.post('/portrait', upload.single('referenceImage'), async (req, res) => {
@@ -99,6 +99,51 @@ export const createCharacterRouter = ({ portraitService, multiviewService }) => 
         },
         promptMetadata: result.promptMetadata,
       })
+    } catch (error) {
+      const { statusCode, body } = toErrorResponse(error)
+      res.status(statusCode).json(body)
+    }
+  })
+
+  /**
+   * POST /api/characters/store
+   *
+   * Persist portrait image and 3D model URL for a player.
+   * Called after sprite creation so assets are archived for future use.
+   *
+   * Body: { playerId, portraitDataUrl, modelUrl }
+   */
+  router.post('/store', async (req, res) => {
+    try {
+      const { playerId, portraitDataUrl, modelUrl } = req.body || {}
+
+      if (!playerId) {
+        throw new AppError('playerId is required', 400)
+      }
+
+      const stored = {}
+
+      if (portraitDataUrl) {
+        const parsed = parseImageDataUrl(portraitDataUrl)
+        stored.portraitUrl = await storageService.uploadPlayerAsset(
+          playerId,
+          'portrait.png',
+          parsed.buffer,
+        )
+      }
+
+      if (modelUrl) {
+        stored.modelUrl = modelUrl
+        // Save model URL as a small JSON manifest alongside the sprite
+        const manifest = JSON.stringify({ modelUrl, storedAt: new Date().toISOString() })
+        await storageService.uploadPlayerAsset(
+          playerId,
+          'model.json',
+          Buffer.from(manifest, 'utf8'),
+        )
+      }
+
+      res.json({ ok: true, ...stored })
     } catch (error) {
       const { statusCode, body } = toErrorResponse(error)
       res.status(statusCode).json(body)
