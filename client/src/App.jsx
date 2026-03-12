@@ -4055,14 +4055,23 @@ function App() {
       <div className="page-backdrop" aria-hidden="true" />
       <main className="workspace-shell">
         {embedded && (
-          <button
-            type="button"
-            className="secondary-button"
-            style={{ position: 'fixed', right: '16px', top: '8px', zIndex: 9999 }}
-            onClick={sendClose}
-          >
-            Back to Game
-          </button>
+          <div style={{ position: 'fixed', right: '16px', top: '8px', zIndex: 9999, display: 'flex', gap: '8px' }}>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={isResettingSession}
+              onClick={handleResetSession}
+            >
+              {isResettingSession ? 'Resetting...' : 'Start Over'}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={sendClose}
+            >
+              Back to Game
+            </button>
+          </div>
         )}
         <header className="status-bar status-progress" aria-label="Pipeline progress">
           <div
