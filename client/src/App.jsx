@@ -2664,40 +2664,6 @@ function App() {
     setIsGeneratingPortrait(false)
   }
 
-  // ── Embedded mode: Generate 2D (portrait → multiview only) ──
-  const handleEmbeddedGenerate2D = async () => {
-    if (!portraitResult?.imageDataUrl || turnaroundGenerationMode || isGeneratingPortrait) {
-      return
-    }
-
-    setError('')
-
-    try {
-      updatePipelineState((nextState) => {
-        nextState.approved.step1 = true
-        nextState.unlocked.step2 = true
-      })
-      const mvResult = await runMultiviewGeneration({
-        mode: 'full',
-        portraitSource: portraitResult,
-        runIdForHistory: currentRunId,
-      })
-      if (!mvResult || !hasCompleteTurnaround(mvResult.views)) {
-        throw new Error('Multiview generation failed.')
-      }
-      updatePipelineState((nextState) => {
-        nextState.approved.step2 = true
-        nextState.unlocked.step3 = true
-      })
-    } catch (requestError) {
-      setError(
-        sanitizeProviderNames(
-          requestError?.message || 'Failed to generate 2D views.',
-        ),
-      )
-    }
-  }
-
   // ── Embedded mode: Generate 3D (Tripo model → rig → animate → sprites) ──
   const handleEmbeddedGenerate3D = async () => {
     if (!canRunStep03AutoPipeline) {
@@ -4107,22 +4073,8 @@ function App() {
                 onReferenceImageChange={setReferenceImage}
                 onGeneratePortrait={handleGeneratePortrait}
                 isGeneratingPortrait={isGeneratingPortrait}
-                hideGenerateButton={!!portraitResult?.imageDataUrl && !isGeneratingPortrait}
               />
             </div>
-            {embedded && portraitResult?.imageDataUrl && !isGeneratingPortrait
-              && !(multiviewResult?.views && hasCompleteTurnaround(multiviewResult.views)) && (
-              <div className="action-row action-row--compact">
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={turnaroundGenerationMode || !portraitResult?.imageDataUrl}
-                  onClick={handleEmbeddedGenerate2D}
-                >
-                  {turnaroundGenerationMode ? 'Generating 2D...' : 'Generate 2D'}
-                </button>
-              </div>
-            )}
           </section>
 
           <section className="panel-card workspace-stage" aria-label="Center Stage Panel">
