@@ -1,6 +1,8 @@
 import express from 'express'
 import cors from 'cors'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { existsSync } from 'node:fs'
 import { loadEnv } from './config/env.js'
 import { createGeminiClient } from './api/geminiClient.js'
 import { createTripoClient } from './api/tripoClient.js'
@@ -87,6 +89,21 @@ export const createApp = (config = loadEnv(), services = {}) => {
 
   app.use('/api/sprites', createSpriteRouter({ spriteService, storageService }))
   app.use('/api/dev', createDevRouter({ requestServerRestart: services.requestServerRestart }))
+
+  // In production, serve the built client SPA from ../client/dist
+  const __dirname = path.dirname(fileURLToPath(import.meta.url))
+  const clientDist = path.resolve(__dirname, '../../client/dist')
+  if (existsSync(clientDist)) {
+    app.use(express.static(clientDist))
+    // SPA fallback — serve index.html for any non-API/non-sprite route
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.startsWith('/sprites/')) {
+        return next()
+      }
+      res.sendFile(path.join(clientDist, 'index.html'))
+    })
+    console.log(`Serving client SPA from ${clientDist}`)
+  }
 
   app.use((error, _req, res, _next) => {
     console.error(error)
