@@ -2,7 +2,9 @@ import dotenv from 'dotenv'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const envPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.env')
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const serverRoot = path.resolve(__dirname, '../..')
+const envPath = path.resolve(serverRoot, '.env')
 
 dotenv.config({
   path: envPath,
@@ -51,7 +53,7 @@ export const loadEnv = (source = process.env) => {
     tripoIdleAnimationTaskType: source.TRIPO_IDLE_ANIMATION_TASK_TYPE || 'animate_model',
     tripoIdleAnimationName: source.TRIPO_IDLE_ANIMATION_NAME || 'preset:biped:wait',
     tripoIdleAnimationInPlace: parseBoolean(source.TRIPO_IDLE_ANIMATION_IN_PLACE, true),
-    spritesDir: source.SPRITES_DIR || 'sprites',
+    spritesDir: source.SPRITES_DIR || path.resolve(serverRoot, 'sprites'),
     spritesPublicUrl: source.SPRITES_PUBLIC_URL || '',
   }
 
