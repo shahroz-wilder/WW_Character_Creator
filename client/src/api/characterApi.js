@@ -25,7 +25,22 @@ const readErrorMessage = async (response) => {
   return fallback
 }
 
-const requestJson = async (url, options) => {
+// Read auth token from URL query params (passed by the game client).
+const getAuthToken = () => {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('token') || ''
+  } catch {
+    return ''
+  }
+}
+
+const requestJson = async (url, options = {}) => {
+  const token = getAuthToken()
+  if (token) {
+    options.headers = { ...options.headers, Authorization: `Bearer ${token}` }
+  }
+
   let response
 
   try {
