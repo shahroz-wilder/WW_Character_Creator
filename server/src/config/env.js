@@ -55,6 +55,7 @@ export const loadEnv = (source = process.env) => {
     tripoIdleAnimationInPlace: parseBoolean(source.TRIPO_IDLE_ANIMATION_IN_PLACE, true),
     spritesDir: source.SPRITES_DIR || path.resolve(serverRoot, 'sprites'),
     spritesPublicUrl: source.SPRITES_PUBLIC_URL || '',
+    zosApiUrl: source.ZOS_API_URL || '',
   }
 
   const missingKeys = []

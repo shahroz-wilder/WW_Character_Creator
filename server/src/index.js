@@ -18,6 +18,7 @@ import { createTripoRouter } from './routes/tripo.js'
 import { createSpriteRouter } from './routes/sprite.js'
 import { createDevRouter } from './routes/dev.js'
 import { createTaskAuditLogger } from './utils/taskAuditLogger.js'
+import { createZosAuthMiddleware } from './middleware/zosAuth.js'
 
 export const createApp = (config = loadEnv(), services = {}) => {
   const taskAuditLogger = services.taskAuditLogger || createTaskAuditLogger()
@@ -79,6 +80,15 @@ export const createApp = (config = loadEnv(), services = {}) => {
   app.use(express.urlencoded({ extended: true }))
 
   app.use('/api/health', createHealthRouter({ config }))
+
+  // Gate generation routes behind zOS auth when ZOS_API_URL is set.
+  if (config.zosApiUrl) {
+    const zosAuth = createZosAuthMiddleware({ zosApiUrl: config.zosApiUrl })
+    const protectedPaths = ['/api/character', '/api/tripo', '/api/sprites']
+    app.use(protectedPaths, zosAuth)
+    console.log(`zOS auth enabled (validating against ${config.zosApiUrl})`)
+  }
+
   app.use('/api/character', createCharacterRouter({ portraitService, multiviewService, storageService }))
   app.use('/api/tripo', createTripoRouter({ tripoService }))
   // Serve stored sprite sheets with immutable cache headers
