@@ -116,7 +116,6 @@ export const createApp = (config = loadEnv(), services = {}) => {
         res.status(502).json({ error: 'Billing service unavailable' })
       }
     })
-
   }
 
   app.use('/api/character', createCharacterRouter({ portraitService, multiviewService, storageService }))
@@ -132,7 +131,6 @@ export const createApp = (config = loadEnv(), services = {}) => {
     storageService,
     billingConfig: config.zeroBillingUrl ? {
       billingUrl: config.zeroBillingUrl,
-      internalToken: config.zeroBillingInternalToken,
     } : null,
   }))
   app.use('/api/dev', createDevRouter({ requestServerRestart: services.requestServerRestart }))

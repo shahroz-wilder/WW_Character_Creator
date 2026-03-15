@@ -56,7 +56,6 @@ export const createSpriteRouter = ({ spriteService, storageService, billingConfi
         try {
           await debitCredits({
             billingUrl: billingConfig.billingUrl,
-            internalToken: billingConfig.internalToken,
             userToken: token,
             amount: PIPELINE_CREDIT_COST,
             reason: 'character-creator',

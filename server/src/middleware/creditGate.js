@@ -92,25 +92,15 @@ export const createCreditGateMiddleware = ({ billingUrl }) => {
 
 /**
  * Debit credits from a user's balance via the billing service.
- * Uses the internal service token for server-to-server auth.
+ * Forwards the user's JWT token for authentication.
  */
-export const debitCredits = async ({ billingUrl, internalToken, userToken, amount, reason, referenceId, metadata }) => {
-  // Determine auth method: internal token (preferred) or user JWT
+export const debitCredits = async ({ billingUrl, userToken, amount, reason, referenceId }) => {
   const headers = { 'Content-Type': 'application/json' }
   const body = { amount, reason }
 
   if (referenceId) body.referenceId = referenceId
-  if (metadata) body.metadata = metadata
 
-  if (internalToken) {
-    headers['X-Internal-Token'] = internalToken
-    // For internal auth, we need to extract userId from the user's token.
-    // Pass the user token to the balance endpoint first to identify them,
-    // or let the caller provide zeroUserId directly.
-    if (metadata?.zeroUserId) {
-      body.zeroUserId = metadata.zeroUserId
-    }
-  } else if (userToken) {
+  if (userToken) {
     headers['Authorization'] = `Bearer ${userToken}`
   }
 
