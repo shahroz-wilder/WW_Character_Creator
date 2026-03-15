@@ -193,9 +193,3 @@ export const checkCredits = async () => {
   }
 }
 
-export const debitCredits = async ({ amount, reason, referenceId, metadata } = {}) =>
-  requestJson('/api/credits/debit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ amount, reason, referenceId, metadata }),
-  })

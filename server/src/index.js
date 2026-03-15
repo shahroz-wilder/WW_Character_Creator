@@ -19,7 +19,7 @@ import { createSpriteRouter } from './routes/sprite.js'
 import { createDevRouter } from './routes/dev.js'
 import { createTaskAuditLogger } from './utils/taskAuditLogger.js'
 import { createZosAuthMiddleware } from './middleware/zosAuth.js'
-import { createCreditGateMiddleware, debitCredits } from './middleware/creditGate.js'
+import { createCreditGateMiddleware } from './middleware/creditGate.js'
 
 export const createApp = (config = loadEnv(), services = {}) => {
   const taskAuditLogger = services.taskAuditLogger || createTaskAuditLogger()
@@ -117,27 +117,6 @@ export const createApp = (config = loadEnv(), services = {}) => {
       }
     })
 
-    app.post('/api/credits/debit', async (req, res) => {
-      const authHeader = req.headers.authorization
-      if (!authHeader) {
-        return res.status(401).json({ error: 'Missing authorization token' })
-      }
-      try {
-        const result = await debitCredits({
-          billingUrl: config.zeroBillingUrl,
-          internalToken: null,
-          userToken: authHeader.slice(7),
-          amount: req.body.amount,
-          reason: req.body.reason || 'character-creator',
-          referenceId: req.body.referenceId,
-          metadata: req.body.metadata,
-        })
-        res.json(result)
-      } catch (err) {
-        console.error('Failed to debit credits:', err.message)
-        res.status(400).json({ error: err.message })
-      }
-    })
   }
 
   app.use('/api/character', createCharacterRouter({ portraitService, multiviewService, storageService }))
@@ -148,7 +127,14 @@ export const createApp = (config = loadEnv(), services = {}) => {
     immutable: true,
   }))
 
-  app.use('/api/sprites', createSpriteRouter({ spriteService, storageService }))
+  app.use('/api/sprites', createSpriteRouter({
+    spriteService,
+    storageService,
+    billingConfig: config.zeroBillingUrl ? {
+      billingUrl: config.zeroBillingUrl,
+      internalToken: config.zeroBillingInternalToken,
+    } : null,
+  }))
   app.use('/api/dev', createDevRouter({ requestServerRestart: services.requestServerRestart }))
 
   // In production, serve the built client SPA from ../client/dist

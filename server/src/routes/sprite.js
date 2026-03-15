@@ -1,8 +1,11 @@
 import { Router } from 'express'
 import { toErrorResponse } from '../utils/errors.js'
 import { assembleSheet } from '../services/sheetAssemblerService.js'
+import { debitCredits } from '../middleware/creditGate.js'
 
-export const createSpriteRouter = ({ spriteService, storageService }) => {
+const PIPELINE_CREDIT_COST = 5_000
+
+export const createSpriteRouter = ({ spriteService, storageService, billingConfig }) => {
   const router = Router()
 
   router.post('/run', async (req, res) => {
@@ -46,6 +49,25 @@ export const createSpriteRouter = ({ spriteService, storageService }) => {
       const { buffer, hash } = await assembleSheet({ directions, idleDirections, spriteSize: spriteSize ?? 128 })
 
       const spriteUrl = await storageService.uploadSpriteSheet(playerId, buffer, hash)
+
+      // Debit credits after successful sprite creation
+      if (billingConfig?.billingUrl) {
+        const token = req.headers.authorization?.slice(7)
+        try {
+          await debitCredits({
+            billingUrl: billingConfig.billingUrl,
+            internalToken: billingConfig.internalToken,
+            userToken: token,
+            amount: PIPELINE_CREDIT_COST,
+            reason: 'character-creator',
+            referenceId: `sprite-${playerId}-${hash}`,
+          })
+          console.log(`Debited ${PIPELINE_CREDIT_COST} credits for player ${playerId}`)
+        } catch (err) {
+          // Log but don't fail the request — sprite was already created
+          console.error('Credit debit failed (sprite already created):', err.message)
+        }
+      }
 
       res.json({
         sprite_url: spriteUrl,
