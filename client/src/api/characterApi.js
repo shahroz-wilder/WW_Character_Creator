@@ -55,7 +55,7 @@ const requestJson = async (url, options = {}) => {
       body.message || 'Insufficient credits to use the character creator.',
     )
     err.code = 'INSUFFICIENT_CREDITS'
-    err.totalCredits = body.totalCredits ?? 0
+    err.balance = body.balance ?? 0
     err.requiredCredits = body.requiredCredits ?? 0
     throw err
   }
@@ -185,10 +185,17 @@ export const checkCredits = async () => {
     if (!response.ok) return { hasCredits: true }
     const data = await response.json()
     return {
-      hasCredits: data.totalCredits >= 5000,
-      totalCredits: data.totalCredits,
+      hasCredits: data.balance >= 5000,
+      balance: data.balance,
     }
   } catch {
     return { hasCredits: true }
   }
 }
+
+export const debitCredits = async ({ amount, reason, referenceId, metadata } = {}) =>
+  requestJson('/api/credits/debit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount, reason, referenceId, metadata }),
+  })

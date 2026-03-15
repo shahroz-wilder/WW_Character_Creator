@@ -37,28 +37,26 @@ export const createCreditGateMiddleware = ({ billingUrl }) => {
     // Check cache
     const cached = cache.get(token)
     if (cached && Date.now() - cached.ts < BALANCE_CACHE_TTL) {
-      if (cached.totalCredits < MIN_CREDITS) {
+      if (cached.balance < MIN_CREDITS) {
         return res.status(402).json({
           error: 'Insufficient credits',
-          totalCredits: cached.totalCredits,
+          balance: cached.balance,
           requiredCredits: MIN_CREDITS,
-          message: `You need at least ${MIN_CREDITS.toLocaleString()} credits to use the character creator. You have ${cached.totalCredits.toLocaleString()}.`,
+          message: `You need at least ${MIN_CREDITS.toLocaleString()} credits to use the character creator. You have ${cached.balance.toLocaleString()}.`,
         })
       }
-      req.creditBalance = cached.totalCredits
+      req.creditBalance = cached.balance
       return next()
     }
 
     // Query the billing service
     try {
-      const response = await fetch(`${billingUrl}/api/shanty/credits/balance`, {
+      const response = await fetch(`${billingUrl}/api/credits/balance`, {
         headers: { Authorization: `Bearer ${token}` },
       })
 
       if (!response.ok) {
         console.error(`Credit balance check failed: HTTP ${response.status}`)
-        // If billing service is down, fail open so we don't block users
-        // when the service is temporarily unavailable
         if (response.status >= 500) {
           console.warn('Billing service error — failing open')
           return next()
@@ -69,27 +67,63 @@ export const createCreditGateMiddleware = ({ billingUrl }) => {
         })
       }
 
-      const { totalCredits } = await response.json()
+      const { balance } = await response.json()
 
-      // Cache the result
-      cache.set(token, { totalCredits, ts: Date.now() })
+      cache.set(token, { balance, ts: Date.now() })
 
-      if (totalCredits < MIN_CREDITS) {
+      if (balance < MIN_CREDITS) {
         return res.status(402).json({
           error: 'Insufficient credits',
-          totalCredits,
+          balance,
           requiredCredits: MIN_CREDITS,
-          message: `You need at least ${MIN_CREDITS.toLocaleString()} credits to use the character creator. You have ${totalCredits.toLocaleString()}.`,
+          message: `You need at least ${MIN_CREDITS.toLocaleString()} credits to use the character creator. You have ${balance.toLocaleString()}.`,
         })
       }
 
-      req.creditBalance = totalCredits
+      req.creditBalance = balance
       next()
     } catch (err) {
       console.error('Credit balance check error:', err.message)
-      // Network error — fail open
       console.warn('Billing service unreachable — failing open')
       next()
     }
   }
+}
+
+/**
+ * Debit credits from a user's balance via the billing service.
+ * Uses the internal service token for server-to-server auth.
+ */
+export const debitCredits = async ({ billingUrl, internalToken, userToken, amount, reason, referenceId, metadata }) => {
+  // Determine auth method: internal token (preferred) or user JWT
+  const headers = { 'Content-Type': 'application/json' }
+  const body = { amount, reason }
+
+  if (referenceId) body.referenceId = referenceId
+  if (metadata) body.metadata = metadata
+
+  if (internalToken) {
+    headers['X-Internal-Token'] = internalToken
+    // For internal auth, we need to extract userId from the user's token.
+    // Pass the user token to the balance endpoint first to identify them,
+    // or let the caller provide zeroUserId directly.
+    if (metadata?.zeroUserId) {
+      body.zeroUserId = metadata.zeroUserId
+    }
+  } else if (userToken) {
+    headers['Authorization'] = `Bearer ${userToken}`
+  }
+
+  const response = await fetch(`${billingUrl}/api/credits/debit`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.message || `Debit failed: HTTP ${response.status}`)
+  }
+
+  return response.json()
 }

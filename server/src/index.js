@@ -19,7 +19,7 @@ import { createSpriteRouter } from './routes/sprite.js'
 import { createDevRouter } from './routes/dev.js'
 import { createTaskAuditLogger } from './utils/taskAuditLogger.js'
 import { createZosAuthMiddleware } from './middleware/zosAuth.js'
-import { createCreditGateMiddleware } from './middleware/creditGate.js'
+import { createCreditGateMiddleware, debitCredits } from './middleware/creditGate.js'
 
 export const createApp = (config = loadEnv(), services = {}) => {
   const taskAuditLogger = services.taskAuditLogger || createTaskAuditLogger()
@@ -98,8 +98,7 @@ export const createApp = (config = loadEnv(), services = {}) => {
     console.log(`zOS auth enabled (validating against ${config.zosApiUrl})`)
   }
 
-  // Proxy credit balance from billing service so the client doesn't need
-  // to know the billing URL directly.
+  // Proxy billing endpoints so the client doesn't need to know the billing URL.
   if (config.zeroBillingUrl) {
     app.get('/api/credits/balance', async (req, res) => {
       const authHeader = req.headers.authorization
@@ -107,7 +106,7 @@ export const createApp = (config = loadEnv(), services = {}) => {
         return res.status(401).json({ error: 'Missing authorization token' })
       }
       try {
-        const response = await fetch(`${config.zeroBillingUrl}/api/shanty/credits/balance`, {
+        const response = await fetch(`${config.zeroBillingUrl}/api/credits/balance`, {
           headers: { Authorization: authHeader },
         })
         const data = await response.json()
@@ -115,6 +114,28 @@ export const createApp = (config = loadEnv(), services = {}) => {
       } catch (err) {
         console.error('Failed to proxy credit balance:', err.message)
         res.status(502).json({ error: 'Billing service unavailable' })
+      }
+    })
+
+    app.post('/api/credits/debit', async (req, res) => {
+      const authHeader = req.headers.authorization
+      if (!authHeader) {
+        return res.status(401).json({ error: 'Missing authorization token' })
+      }
+      try {
+        const result = await debitCredits({
+          billingUrl: config.zeroBillingUrl,
+          internalToken: null,
+          userToken: authHeader.slice(7),
+          amount: req.body.amount,
+          reason: req.body.reason || 'character-creator',
+          referenceId: req.body.referenceId,
+          metadata: req.body.metadata,
+        })
+        res.json(result)
+      } catch (err) {
+        console.error('Failed to debit credits:', err.message)
+        res.status(400).json({ error: err.message })
       }
     })
   }
