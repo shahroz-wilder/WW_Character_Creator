@@ -18,7 +18,6 @@ import { createTripoRouter } from './routes/tripo.js'
 import { createSpriteRouter } from './routes/sprite.js'
 import { createDevRouter } from './routes/dev.js'
 import { createTaskAuditLogger } from './utils/taskAuditLogger.js'
-import { createZosAuthMiddleware } from './middleware/zosAuth.js'
 import { createCreditGateMiddleware } from './middleware/creditGate.js'
 
 export const createApp = (config = loadEnv(), services = {}) => {
@@ -82,24 +81,16 @@ export const createApp = (config = loadEnv(), services = {}) => {
 
   app.use('/api/health', createHealthRouter({ config }))
 
-  // Gate generation routes behind auth + optional credit check.
-  // When ZERO_BILLING_URL is set, the credit gate also validates the auth token
-  // (the billing service's balance endpoint requires a valid JWT), so we skip
-  // the separate zOS auth middleware to avoid double-checking.
-  const protectedPaths = ['/api/character', '/api/tripo', '/api/sprites']
-
+  // Gate generation routes behind credit check + auth.
+  // The billing service's balance endpoint validates the JWT, so this
+  // also serves as authentication — no separate auth middleware needed.
   if (config.zeroBillingUrl) {
+    const protectedPaths = ['/api/character', '/api/tripo', '/api/sprites']
     const creditGate = createCreditGateMiddleware({ billingUrl: config.zeroBillingUrl })
     app.use(protectedPaths, creditGate)
     console.log(`Credit gate enabled (auth + balance check via ${config.zeroBillingUrl})`)
-  } else if (config.zosApiUrl) {
-    const zosAuth = createZosAuthMiddleware({ zosApiUrl: config.zosApiUrl })
-    app.use(protectedPaths, zosAuth)
-    console.log(`zOS auth enabled (validating against ${config.zosApiUrl})`)
-  }
 
-  // Proxy billing endpoints so the client doesn't need to know the billing URL.
-  if (config.zeroBillingUrl) {
+    // Proxy balance endpoint so the client doesn't need to know the billing URL.
     app.get('/api/credits/balance', async (req, res) => {
       const authHeader = req.headers.authorization
       if (!authHeader) {
