@@ -19,6 +19,7 @@ import { createSpriteRouter } from './routes/sprite.js'
 import { createDevRouter } from './routes/dev.js'
 import { createTaskAuditLogger } from './utils/taskAuditLogger.js'
 import { createZosAuthMiddleware } from './middleware/zosAuth.js'
+import { createCreditGateMiddleware } from './middleware/creditGate.js'
 
 export const createApp = (config = loadEnv(), services = {}) => {
   const taskAuditLogger = services.taskAuditLogger || createTaskAuditLogger()
@@ -81,12 +82,41 @@ export const createApp = (config = loadEnv(), services = {}) => {
 
   app.use('/api/health', createHealthRouter({ config }))
 
-  // Gate generation routes behind zOS auth when ZOS_API_URL is set.
-  if (config.zosApiUrl) {
+  // Gate generation routes behind auth + optional credit check.
+  // When ZERO_BILLING_URL is set, the credit gate also validates the auth token
+  // (the billing service's balance endpoint requires a valid JWT), so we skip
+  // the separate zOS auth middleware to avoid double-checking.
+  const protectedPaths = ['/api/character', '/api/tripo', '/api/sprites']
+
+  if (config.zeroBillingUrl) {
+    const creditGate = createCreditGateMiddleware({ billingUrl: config.zeroBillingUrl })
+    app.use(protectedPaths, creditGate)
+    console.log(`Credit gate enabled (auth + balance check via ${config.zeroBillingUrl})`)
+  } else if (config.zosApiUrl) {
     const zosAuth = createZosAuthMiddleware({ zosApiUrl: config.zosApiUrl })
-    const protectedPaths = ['/api/character', '/api/tripo', '/api/sprites']
     app.use(protectedPaths, zosAuth)
     console.log(`zOS auth enabled (validating against ${config.zosApiUrl})`)
+  }
+
+  // Proxy credit balance from billing service so the client doesn't need
+  // to know the billing URL directly.
+  if (config.zeroBillingUrl) {
+    app.get('/api/credits/balance', async (req, res) => {
+      const authHeader = req.headers.authorization
+      if (!authHeader) {
+        return res.status(401).json({ error: 'Missing authorization token' })
+      }
+      try {
+        const response = await fetch(`${config.zeroBillingUrl}/api/shanty/credits/balance`, {
+          headers: { Authorization: authHeader },
+        })
+        const data = await response.json()
+        res.status(response.status).json(data)
+      } catch (err) {
+        console.error('Failed to proxy credit balance:', err.message)
+        res.status(502).json({ error: 'Billing service unavailable' })
+      }
+    })
   }
 
   app.use('/api/character', createCharacterRouter({ portraitService, multiviewService, storageService }))

@@ -49,6 +49,17 @@ const requestJson = async (url, options = {}) => {
     throw new Error(error?.message || 'Network request failed.')
   }
 
+  if (response.status === 402) {
+    const body = await response.json().catch(() => ({}))
+    const err = new Error(
+      body.message || 'Insufficient credits to use the character creator.',
+    )
+    err.code = 'INSUFFICIENT_CREDITS'
+    err.totalCredits = body.totalCredits ?? 0
+    err.requiredCredits = body.requiredCredits ?? 0
+    throw err
+  }
+
   if (!response.ok) {
     throw new Error(await readErrorMessage(response))
   }
@@ -162,3 +173,22 @@ export const getHealth = async () =>
   requestJson('/api/health', {
     method: 'GET',
   })
+
+export const checkCredits = async () => {
+  const token = getAuthToken()
+  if (!token) return { hasCredits: true }
+
+  try {
+    const response = await fetch('/api/credits/balance', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!response.ok) return { hasCredits: true }
+    const data = await response.json()
+    return {
+      hasCredits: data.totalCredits >= 5000,
+      totalCredits: data.totalCredits,
+    }
+  } catch {
+    return { hasCredits: true }
+  }
+}
