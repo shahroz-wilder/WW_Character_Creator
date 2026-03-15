@@ -56,6 +56,7 @@ export const loadEnv = (source = process.env) => {
     spritesDir: source.SPRITES_DIR || path.resolve(serverRoot, 'sprites'),
     spritesPublicUrl: source.SPRITES_PUBLIC_URL || '',
     zosApiUrl: source.ZOS_API_URL || '',
+    zeroBillingUrl: source.ZERO_BILLING_URL || '',
   }
 
   const missingKeys = []
